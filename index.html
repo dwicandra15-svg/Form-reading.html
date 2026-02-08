@@ -1,975 +1,32 @@
-<<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>English Reading Assessment App</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: .5; }
-        }
-        .animate-pulse {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-    </style>
-</head>
-<body class="bg-gradient-to-br from-blue-500 to-purple-600 min-h-screen p-3">
-    <div id="app" class="max-w-4xl mx-auto"></div>
- 
-    <script>
-        // =========================
-        // 🔐 ADMIN CREDENTIALS
-        // =========================
-        const ADMIN_USERNAME = 'Unknown';
-        const ADMIN_PASSWORD = '123456';
-        const STORAGE_KEY = 'reading_missions_v1';
- 
-        // =========================
-        // 🧩 STATE MANAGEMENT
-        // =========================
-        let state = {
-            // student
-            studentName: '',
-            studentClass: '',
-            selectedLevel: '',
-            showForm: true,
-            currentMission: 0,
-            missionScores: Array(7).fill(null), // will be resized after level chosen
-            showFinalScore: false,
-            isSpeaking: false,
-            isRecording: false,
-            transcript: '',
-            showResult: false,
-            recognition: null,
-            errorMessage: '',
- 
-            // admin
-            showAdminLogin: false,
-            showAdminMenu: false,
-            adminView: null, // 'menu' | 'add' | 'change'
-            isAdmin: false,
-            adminUser: '',
-            adminPass: '',
-            adminSelectedLevel: 'beginner',
-            adminNewSentence: '',
-            adminEditIndex: null,
-            adminEditValue: '',
- 
-currentChapter: 'Chapter 2: Taking Trips',
-currentUnit: 'Unit 2: What an Experience',
-        };
- 
-        // =========================
-        // 📚 DEFAULT MISSIONS (BASE)
-        // =========================
-        const defaultMissions = {
-            beginner: [
-                "I love to travel and see new places",
-                "The beach is very beautiful today",
-                "We visited a wonderful museum yesterday",
-                "My family enjoys camping in the mountains",
-                "The hotel room has a nice view",
-                "I like to take pictures of nature",
-                "Traveling makes me very happy"
-            ],
-            intermediate: [
-                "I had an amazing experience during my trip to Bali",
-                "The view from the mountain top was absolutely breathtaking",
-                "We explored ancient temples and learned about local culture",
-                "Swimming in the crystal clear water was unforgettable",
-                "The traditional dance performance was truly spectacular",
-                "Meeting friendly locals made our journey more meaningful",
-                "This vacation created wonderful memories that will last forever"
-            ],
-            advanced: [
-                "Embarking on this extraordinary adventure provided invaluable insights into diverse cultures",
-                "The magnificent landscape encompassed towering peaks and pristine valleys below",
-                "Our expedition through historical landmarks revealed fascinating architectural achievements",
-                "Experiencing authentic cuisine while interacting with indigenous communities was remarkable",
-                "The mesmerizing performance showcased centuries-old traditions passed through generations",
-                "Establishing connections with welcoming inhabitants enriched our understanding significantly",
-                "This remarkable journey profoundly transformed our perspectives on global diversity"
-            ],
-            expert: [
-                "Traversing through this unprecedented expedition yielded profound comprehension of multifaceted civilizations",
-                "The awe-inspiring topography encompassed monumental summits and immaculate geological formations",
-                "Our archaeological investigation unveiled extraordinary testimonials of sophisticated engineering methodologies",
-                "Encountering gastronomic authenticity whilst engaging with aboriginal populations proved extraordinarily enlightening",
-                "The captivating theatrical presentation exemplified antiquated customs meticulously preserved across millennia",
-                "Cultivating meaningful rapport with hospitable denizens substantially augmented our anthropological cognizance",
-                "This transformative odyssey fundamentally revolutionized our philosophical paradigms regarding intercultural dynamics"
-            ]
-        };
- 
-        // =========================
-        // 💾 LOCAL STORAGE HELPERS
-        // =========================
-        function loadMissions() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                if (!raw) return JSON.parse(JSON.stringify(defaultMissions));
-                const parsed = JSON.parse(raw);
-                // safety: ensure all levels exist
-                for (const key of ['beginner','intermediate','advanced','expert']) {
-                    if (!Array.isArray(parsed[key])) parsed[key] = [...defaultMissions[key]];
-                }
-                return parsed;
-            } catch {
-                return JSON.parse(JSON.stringify(defaultMissions));
-            }
-        }
-        function saveMissions(missions) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(missions));
-        }
-        let missionsByLevel = loadMissions(); // source of truth
- 
-        // =========================
-        // 🏁 SCORING THRESHOLDS
-        // =========================
-        const scoringThresholds = {
-            beginner: { excellent: 70, good: 50, enough: 30 },
-            intermediate: { excellent: 80, good: 60, enough: 35 },
-            advanced: { excellent: 88, good: 68, enough: 42 },
-            expert: { excellent: 95, good: 75, enough: 50 }
-        };
- 
-        // =========================
-        // 🎤 SPEECH RECOGNITION
-        // =========================
-        function initializeSpeechRecognition() {
-            if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-                state.errorMessage = '❌ Browser tidak mendukung Speech Recognition. Gunakan Chrome!';
-                return false;
-            }
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            const recognition = new SpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.lang = 'en-US';
-            recognition.maxAlternatives = 1;
- 
-            recognition.onstart = () => { state.isRecording = true; state.errorMessage=''; render(); };
-            recognition.onresult = (event) => {
-                const spokenText = event.results[0][0].transcript;
-                state.transcript = spokenText;
-                state.isRecording = false;
-                state.errorMessage = '';
-                render();
-            };
-            recognition.onerror = (event) => {
-                state.isRecording = false;
-                if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-                    state.errorMessage = '❌ Microphone ditolak! Buka Settings > Site settings > Microphone > Allow';
-                } else if (event.error === 'no-speech') {
-                    state.errorMessage = '⚠️ Tidak ada suara terdeteksi. Coba lagi dan bicara lebih keras!';
-                } else if (event.error === 'aborted') {
-                    state.errorMessage = '⚠️ Recording dibatalkan. Coba lagi!';
-                } else {
-                    state.errorMessage = '❌ Error: ' + event.error;
-                }
-                render();
-            };
-            recognition.onend = () => { state.isRecording = false; render(); };
-            state.recognition = recognition;
-            return true;
-        }
- 
-        async function testMicrophone() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(track => track.stop());
-                alert('✅ MICROPHONE BERHASIL!\n\nSekarang Anda bisa:\n1. Klik LISTEN untuk mendengar\n2. Klik JUDGE untuk merekam\n3. Klik RESULT untuk nilai');
-                state.errorMessage = '✅ Microphone OK! Siap digunakan.';
-                render();
-            } catch (error) {
-                alert('❌ MICROPHONE TIDAK DAPAT DIAKSES!\n\nCara mengizinkan:\n\n📱 ANDROID:\n1. Tap 3 titik (⋮)\n2. Tap "Site settings"\n3. Tap "Microphone"\n4. Pilih "Allow"\n5. Refresh (F5)');
-                state.errorMessage = '❌ Microphone ditolak!';
-                render();
-            }
-        }
- 
-        // =========================
-        // 🧮 ASSESSMENT LOGIC
-        // =========================
-        function handleStartAssessment() {
-            const name = document.getElementById('studentName').value.trim();
-            const className = document.getElementById('studentClass').value.trim();
-            const level = document.getElementById('level').value;
- 
-            if (!name || !className) { alert('⚠️ Mohon isi Nama dan Kelas!'); return; }
-            if (!level) { alert('⚠️ Mohon pilih Level Kesulitan!'); return; }
- 
-            state.studentName = name;
-            state.studentClass = className;
-            state.selectedLevel = level;
-            state.showForm = false;
- 
-            // Resize missionScores dynamically to the number of missions in the selected level (Mode A)
-            const totalMissions = missionsByLevel[state.selectedLevel].length;
-            state.missionScores = Array(totalMissions).fill(null);
- 
-            if (!initializeSpeechRecognition()) {
-                alert('❌ Browser tidak mendukung Speech Recognition!');
-            }
-            render();
-        }
- 
-        function speakText() {
-            if (window.speechSynthesis.speaking) {
-                window.speechSynthesis.cancel();
-                state.isSpeaking = false;
-                render();
-                return;
-            }
-            window.speechSynthesis.cancel();
-            const missions = missionsByLevel[state.selectedLevel];
-            setTimeout(() => {
-                const utterance = new SpeechSynthesisUtterance(missions[state.currentMission]);
-                utterance.lang = 'en-US';
-                utterance.rate = 0.6;
-                utterance.pitch = 1.0;
-                utterance.volume = 1.0;
-                utterance.onstart = () => { state.isSpeaking = true; render(); };
-                utterance.onend = () => { state.isSpeaking = false; render(); };
-                utterance.onerror = () => { state.isSpeaking = false; render(); };
-                window.speechSynthesis.speak(utterance);
-            }, 100);
-        }
- 
-        function handleJudge() {
-            if (!state.recognition) { alert('❌ Speech Recognition tidak tersedia!'); return; }
-            state.transcript = '';
-            state.showResult = false;
-            state.errorMessage = '';
-            try {
-                state.recognition.start();
-            } catch (error) {
-                if (error.message && error.message.includes('already started')) {
-                    state.recognition.stop();
-                    setTimeout(() => {
-                        try { state.recognition.start(); }
-                        catch { state.errorMessage = '❌ Gagal memulai recording.'; render(); }
-                    }, 500);
-                } else {
-                    state.errorMessage = '❌ Gagal memulai recording.';
-                    render();
-                }
-            }
-        }
- 
-        function calculateScore(original, spoken, level) {
-            if (!spoken || spoken.trim() === '') return 'Bad';
-            const normalize = (text) => text.toLowerCase().replace(/[.,!?'"]/g, '').replace(/\s+/g, ' ').trim();
-            const originalWords = normalize(original).split(' ');
-            const spokenWords = normalize(spoken).split(' ');
-            let matches = 0;
-            originalWords.forEach(word => { if (spokenWords.includes(word)) matches++; });
-            const accuracy = (matches / originalWords.length) * 100;
-            const thresholds = scoringThresholds[level];
-            if (accuracy >= thresholds.excellent) return 'Excellent';
-            if (accuracy >= thresholds.good) return 'Good';
-            if (accuracy >= thresholds.enough) return 'Enough';
-            return 'Bad';
-        }
- 
-        function handleResult() {
-            if (!state.transcript || state.transcript.trim() === '') {
-                alert('⚠️ BELUM ADA REKAMAN!\n\n1. Klik JUDGE\n2. Baca kalimat\n3. Tunggu teks muncul\n4. Klik RESULT');
-                return;
-            }
-            const missions = missionsByLevel[state.selectedLevel];
-            const score = calculateScore(missions[state.currentMission], state.transcript, state.selectedLevel);
-            state.missionScores[state.currentMission] = score;
-            state.showResult = true;
-            render();
-        }
- 
-        function handleNext() {
-            if (!state.missionScores[state.currentMission]) { alert('⚠️ Klik RESULT dulu untuk mendapat nilai!'); return; }
-            const total = missionsByLevel[state.selectedLevel].length;
-            if (state.currentMission < total - 1) {
-                state.currentMission++;
-                state.transcript = '';
-                state.showResult = false;
-                state.errorMessage = '';
-            } else {
-                state.showFinalScore = true;
-            }
-            render();
-        }
- 
-        function calculateFinalScore() {
-            const scoreValues = { 'Excellent': 100, 'Good': 75, 'Enough': 50, 'Bad': 25 };
-            const total = missionsByLevel[state.selectedLevel].length || 1;
-            const sum = state.missionScores.reduce((s, sc) => s + (scoreValues[sc] || 0), 0);
-            return Math.round(sum / total);
-        }
- 
-        function getFinalGrade(avgScore) {
-            if (avgScore >= 85) return 'Excellent';
-            if (avgScore >= 65) return 'Good';
-            if (avgScore >= 40) return 'Enough';
-            return 'Bad';
-        }
- 
-        function getScoreColor(score) {
-            const colors = {
-                'Excellent': 'bg-green-500 text-white border-green-600',
-                'Good': 'bg-blue-500 text-white border-blue-600',
-                'Enough': 'bg-yellow-500 text-white border-yellow-600',
-                'Bad': 'bg-red-500 text-white border-red-600'
-            };
-            return colors[score] || 'bg-gray-500 text-white border-gray-600';
-        }
- 
-        function getScoreColorLight(score) {
-            const colors = {
-                'Excellent': 'text-green-700 bg-green-100 border-green-400',
-                'Good': 'text-blue-700 bg-blue-100 border-blue-400',
-                'Enough': 'text-yellow-700 bg-yellow-100 border-yellow-400',
-                'Bad': 'text-red-700 bg-red-100 border-red-400'
-            };
-            return colors[score] || 'text-gray-700 bg-gray-100 border-gray-400';
-        }
- 
-        function getLevelBadgeColor(level) {
-            const colors = { beginner: 'bg-green-500', intermediate: 'bg-blue-500', advanced: 'bg-purple-500', expert: 'bg-red-500' };
-            return colors[level] || 'bg-gray-500';
-        }
- 
-        function getLevelName(level) {
-            const names = { beginner: '🌱 BEGINNER', intermediate: '🌿 INTERMEDIATE', advanced: '🌳 ADVANCED', expert: '🏆 EXPERT' };
-            return names[level] || level;
-        }
- 
-        function restartApp() {
-            state = {
-                studentName: '',
-                studentClass: '',
-                selectedLevel: '',
-                showForm: true,
-                currentMission: 0,
-                missionScores: Array(7).fill(null),
-                showFinalScore: false,
-                isSpeaking: false,
-                isRecording: false,
-                transcript: '',
-                showResult: false,
-                recognition: null,
-                errorMessage: '',
-                // admin
-                showAdminLogin: false,
-                showAdminMenu: false,
-                adminView: null,
-                isAdmin: false,
-                adminUser: '',
-                adminPass: '',
-                adminSelectedLevel: 'beginner',
-                adminNewSentence: '',
-                adminEditIndex: null,
-                adminEditValue: '',
-            };
-            render();
-        }
- 
-        // =========================
-        // 🔧 ADMIN FUNCTIONS
-        // =========================
-        function openAdmin() {
-            state.showAdminLogin = true;
-            state.showAdminMenu = false;
-            state.adminView = null;
-            render();
-        }
-        function closeAdminAll() {
-            state.showAdminLogin = false;
-            state.showAdminMenu = false;
-            state.adminView = null;
-            state.isAdmin = false;
-            state.adminUser = '';
-            state.adminPass = '';
-            state.adminNewSentence = '';
-            state.adminEditIndex = null;
-            state.adminEditValue = '';
-            render();
-        }
-        function handleAdminLogin() {
-            if (state.adminUser === ADMIN_USERNAME && state.adminPass === ADMIN_PASSWORD) {
-                state.isAdmin = true;
-                state.showAdminLogin = false;
-                state.showAdminMenu = true;
-                state.adminView = 'menu';
-            } else {
-                alert('❌ Username atau Password salah.');
-            }
-            render();
-        }
-        function gotoAdminMenu() { state.showAdminMenu = true; state.adminView = 'menu'; render(); }
-        function gotoAdd() { state.showAdminMenu = true; state.adminView = 'add'; render(); }
-        function gotoChangeChapterUnit() {
-    state.adminView = 'chapterUnit';
-    render();
-}
-        function adminLogout() { closeAdminAll(); }
- 
-        function adminAddMaterial() {
-            const txt = (state.adminNewSentence || '').trim();
-            if (!txt) { alert('Kalimat tidak boleh kosong.'); return; }
-            missionsByLevel[state.adminSelectedLevel].push(txt);
-            saveMissions(missionsByLevel);
-            state.adminNewSentence = '';
-            alert('✅ Materi berhasil ditambahkan.');
-            render();
-        }
- 
-        function adminDeleteMaterial(level, index) {function saveChapterUnit() {
-    localStorage.setItem('chapter_unit_settings_v1', JSON.stringify({
-        chapter: state.currentChapter,
-        unit: state.currentUnit
-    }));
-    alert('✅ Chapter & Unit berhasil diperbarui!');
-    render();
-}
-            if (!confirm('Hapus materi ini?')) return;
-            missionsByLevel[level].splice(index, 1);
-            saveMissions(missionsByLevel);
-            // if currently active level affected during assessment, adjust safely:
-            if (!state.showForm && state.selectedLevel === level) {
-                const total = missionsByLevel[level].length;
-                state.missionScores = state.missionScores.slice(0, total);
-                if (state.currentMission >= total) state.currentMission = Math.max(0, total - 1);
-            }
-            render();
-        }
- 
-        function startEditMaterial(level, index) {
-            state.adminEditIndex = index;
-            state.adminEditValue = missionsByLevel[level][index];
-            render();
-        }
-        function cancelEditMaterial() {
-            state.adminEditIndex = null;
-            state.adminEditValue = '';
-            render();
-        }
-        function saveEditMaterial(level, index) {
-            const txt = (state.adminEditValue || '').trim();
-            if (!txt) { alert('Kalimat tidak boleh kosong.'); return; }
-            missionsByLevel[level][index] = txt;
-            saveMissions(missionsByLevel);
-            state.adminEditIndex = null;
-            state.adminEditValue = '';
-            alert('✅ Materi diperbarui.');
-            render();
-        }
- 
-        // =========================
-        // 🖼️ RENDERING
-        // =========================
-        function renderForm() {
-            // ••• menu button top-right (only on form page)
-            const adminButton = `
-                <div class="flex justify-end mb-2">
-                    <button onclick="openAdmin()" class="text-white/90 hover:text-white bg-white/10 hover:bg-white/20 backdrop-blur px-3 py-1 rounded-lg text-xl leading-none">⋮</button>
-                </div>
-            `;
-            return `
-                <div class="min-h-screen flex items-center justify-center p-4">
-                    <div class="w-full max-w-md">
-                        ${adminButton}
-                        <div class="bg-white rounded-2xl shadow-2xl p-8">
-                            <div class="text-center mb-6">
-                                <div class="text-6xl mb-3">📚</div>
-                                <h1 class="text-2xl font-bold text-gray-800 mb-2">English Reading Assessment</h1>
-                                <p class="text-sm text-gray-600">${state.currentChapter} - ${state.currentUnit}</p>
-                            </div>
- 
-                            <div class="space-y-4 mb-6">
-                                <div>
-                                    <label class="block text-sm font-bold text-gray-700 mb-2">👤 Student Name / Nama Siswa:</label>
-                                    <input type="text" id="studentName" placeholder="Enter your name"
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-base"/>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-bold text-gray-700 mb-2">🏫 Class / Kelas:</label>
-                                    <input type="text" id="studentClass" placeholder="e.g., 7A, 8B, IX-1"
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-base"/>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-bold text-gray-700 mb-3">🎯 Difficulty Level / Tingkat Kesulitan:</label>
-                                    <select id="level"
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-base font-semibold bg-white">
-                                        <option value="">-- Select Level --</option>
-                                        <option value="beginner">🌱 BEGINNER (Easy - Excellent ≥70%)</option>
-                                        <option value="intermediate">🌿 INTERMEDIATE (Normal - Excellent ≥80%)</option>
-                                        <option value="advanced">🌳 ADVANCED (Hard - Excellent ≥88%)</option>
-                                        <option value="expert">🏆 EXPERT (Very Hard - Excellent ≥95%)</option>
-                                    </select>
-                                </div>
-                                <div class="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3">
-                                    <p class="text-xs text-yellow-800 font-semibold">⚠️ <strong>Perhatian:</strong> Semakin tinggi level, semakin susah mendapat nilai Excellent!</p>
-                                </div>
-                            </div>
- 
-                            <button onclick="handleStartAssessment()"
-                                class="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white py-4 rounded-lg font-bold text-lg hover:from-blue-600 hover:to-purple-700 shadow-lg transform hover:scale-105 transition">
-                                🚀 Start Assessment
-                            </button>
-                        </div>
-                    </div>
-                </div>
- 
-                ${renderAdminOverlays()}
-            `;
-        }
- 
-        function renderFinalScore() {
-            const finalScore = calculateFinalScore();
-            const finalGrade = getFinalGrade(finalScore);
-            const thresholds = scoringThresholds[state.selectedLevel];
-            return `
-                <div class="min-h-screen flex items-center justify-center p-4">
-                    <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-2xl w-full">
-                        <div class="text-center mb-6">
-                            <div class="text-6xl mb-3">🏆</div>
-                            <h1 class="text-3xl font-bold text-gray-800 mb-1">Assessment Complete!</h1>
-                            <p class="text-gray-600">All missions completed</p>
-                        </div>
- 
-                        <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-5 mb-4 border-2 border-blue-300">
-                            <div class="grid grid-cols-2 gap-4 mb-3">
-                                <div class="text-center border-r border-blue-300 pr-3">
-                                    <p class="text-xs text-gray-500 font-bold mb-2 uppercase">Student Name</p>
-                                    <p class="text-lg font-black text-gray-800">${state.studentName}</p>
-                                </div>
-                                <div class="text-center pl-3">
-                                    <p class="text-xs text-gray-500 font-bold mb-2 uppercase">Class</p>
-                                    <p class="text-lg font-black text-gray-800">${state.studentClass}</p>
-                                </div>
-                            </div>
-                            <div class="text-center pt-3 border-t border-blue-300">
-                                <p class="text-xs text-gray-500 font-bold mb-2 uppercase">Difficulty Level</p>
-                                <span class="${getLevelBadgeColor(state.selectedLevel)} text-white px-4 py-2 rounded-lg font-black text-sm">
-                                    ${getLevelName(state.selectedLevel)}
-                                </span>
-                                <p class="text-xs text-gray-600 mt-2">Excellent threshold: ≥${thresholds.excellent}%</p>
-                            </div>
-                        </div>
- 
-                        <div class="bg-gradient-to-r from-purple-100 to-pink-100 rounded-xl p-6 mb-5">
-                            <h2 class="text-xl font-semibold text-center mb-3">Final Score</h2>
-                            <div class="text-5xl font-bold text-center text-purple-600 mb-2">${finalScore}</div>
-                            <div class="text-2xl font-bold text-center py-3 px-4 rounded-lg border-2 ${getScoreColorLight(finalGrade)}">
-                                ${finalGrade}
-                            </div>
-                        </div>
- 
-                        <div class="space-y-2 mb-5">
-                            <h3 class="font-semibold text-gray-700 mb-2">Score per Mission:</h3>
-                            ${state.missionScores.map((score, idx) => `
-                                <div class="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
-                                    <span class="text-gray-700 font-medium">Mission ${idx + 1}</span>
-                                    <span class="font-bold px-4 py-1 rounded border-2 ${getScoreColorLight(score)}">
-                                        ${score}
-                                    </span>
-                                </div>
-                            `).join('')}
-                        </div>
- 
-                        <button onclick="restartApp()"
-                            class="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 rounded-lg font-bold hover:from-purple-600 hover:to-pink-600 text-lg shadow-lg">
-                            🔄 Start New Assessment
-                        </button>
-                    </div>
-                </div>
-            `;
-        }
- 
-        function renderMainApp() {
-            const missions = missionsByLevel[state.selectedLevel];
-            const total = missions.length;
-            const currentScore = state.missionScores[state.currentMission];
-            const thresholds = scoringThresholds[state.selectedLevel];
- 
-            return `
-                <!-- Student Info -->
-                <div class="bg-white rounded-xl p-4 mb-3 shadow-lg border-2 border-blue-300">
-                    <div class="grid grid-cols-2 gap-4 mb-3">
-                        <div class="border-r border-gray-300 pr-3">
-                            <p class="text-xs text-gray-500 font-semibold mb-1 uppercase">Student Name</p>
-                            <p class="text-base text-gray-800 font-bold truncate">${state.studentName}</p>
-                        </div>
-                        <div class="pl-3">
-                            <p class="text-xs text-gray-500 font-semibold mb-1 uppercase">Class</p>
-                            <p class="text-base text-gray-800 font-bold">${state.studentClass}</p>
-                        </div>
-                    </div>
-                    <div class="text-center pt-3 border-t border-gray-300">
-                        <span class="${getLevelBadgeColor(state.selectedLevel)} text-white px-3 py-1 rounded-lg font-bold text-xs">
-                            ${getLevelName(state.selectedLevel)}
-                        </span>
-                        <p class="text-xs text-gray-600 mt-1">
-                            Excellent: ≥${thresholds.excellent}% | Good: ≥${thresholds.good}% | Enough: ≥${thresholds.enough}%</p>
-                    </div>
-                </div>
- 
-                <!-- Test Microphone Button -->
-                <button onclick="testMicrophone()"
-                    class="w-full bg-gradient-to-r from-green-500 to-blue-500 text-white py-3 px-4 rounded-xl font-black text-base hover:from-green-600 hover:to-blue-600 mb-3 shadow-lg flex items-center justify-center gap-2">
-                    <span class="text-2xl">🎤</span>
-                    TEST MICROPHONE (KLIK INI DULU!)
-                </button>
- 
-                <!-- Error Message -->
-                ${state.errorMessage ? `
-                    <div class="bg-${state.errorMessage.includes('✅') ? 'green' : 'red'}-50 border-2 border-${state.errorMessage.includes('✅') ? 'green' : 'red'}-400 rounded-xl p-3 mb-3">
-                        <p class="text-${state.errorMessage.includes('✅') ? 'green' : 'red'}-800 font-bold text-sm text-center">${state.errorMessage}</p>
-                    </div>
-                ` : ''}
- 
-                <div class="bg-white rounded-2xl shadow-2xl p-5">
-                    <!-- Header -->
-                    <div class="text-center mb-4">
-                        <h1 class="text-xl font-bold text-gray-800 mb-1">📚 English Reading Test</h1>
-                        <p class="text-xs text-gray-600 font-semibold">${state.currentChapter} - ${state.currentUnit}</p>
-                        <p class="text-lg text-gray-800 font-bold mt-2">Mission ${state.currentMission + 1} of ${total}</p>
-                        <div class="w-full bg-gray-200 rounded-full h-3 mt-2">
-                            <div class="bg-gradient-to-r from-blue-500 to-purple-600 h-3 rounded-full transition-all" style="width: ${((state.currentMission + 1) / total) * 100}%"></div>
-                        </div>
-                    </div>
- 
-                    <!-- Mission Text -->
-                    <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-4 mb-4 border-2 border-blue-300">
-                        <div class="flex justify-between items-start mb-3">
-                            <h2 class="text-sm font-bold text-gray-800">📖 Read this:</h2>
-                            <button onclick="speakText()" class="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm shadow-lg transition ${state.isSpeaking ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white'}">
-                                🔊 ${state.isSpeaking ? 'STOP' : 'LISTEN'}
-                            </button>
-                        </div>
-                        <p class="text-base text-gray-800 leading-relaxed font-semibold">"${missions[state.currentMission]}"</p>
-                    </div>
- 
-                    <!-- Recording Status -->
-                    ${state.isRecording ? `
-                        <div class="bg-red-50 border-2 border-red-500 rounded-xl p-4 mb-4 text-center animate-pulse">
-                            <div class="text-5xl mb-2">🎤</div>
-                            <p class="text-red-800 font-black text-lg">RECORDING...</p>
-                            <p class="text-red-600 font-bold text-sm">Speak clearly now!</p>
-                        </div>
-                    ` : ''}
- 
-                    <!-- Transcript -->
-                    ${state.transcript ? `
-                        <div class="bg-green-50 border-2 border-green-500 rounded-xl p-4 mb-4">
-                            <p class="text-xs text-green-700 font-bold mb-2">✅ YOUR RECORDING:</p>
-                            <p class="text-sm text-gray-800 font-semibold italic">"${state.transcript}"</p>
-                            <p class="text-xs text-green-600 mt-2 font-bold">👉 Click RESULT to get score</p>
-                        </div>
-                    ` : ''}
- 
-                    <!-- Score Display -->
-                    ${state.showResult && currentScore ? `
-                        <div class="rounded-xl p-5 mb-4 text-center border-4 shadow-xl ${getScoreColor(currentScore)}">
-                            <div class="text-5xl mb-2">✓</div>
-                            <p class="text-sm font-bold mb-1">YOUR SCORE:</p>
-                            <p class="text-4xl font-black mb-2">${currentScore}</p>
-                        </div>
-                    ` : ''}
- 
-                    <!-- Action Buttons -->
-                    <div class="grid grid-cols-3 gap-3 mb-4">
-                        <button onclick="handleJudge()" ${state.isRecording ? 'disabled' : ''} class="bg-green-500 text-white py-4 rounded-xl font-black text-sm hover:bg-green-600 disabled:bg-gray-400 shadow-lg">
-                            <div class="text-2xl mb-1">🎤</div>
-                            JUDGE
-                        </button>
-                        <button onclick="handleResult()" ${!state.transcript || state.isRecording ? 'disabled' : ''} class="bg-blue-500 text-white py-4 rounded-xl font-black text-sm hover:bg-blue-600 disabled:bg-gray-400 shadow-lg">
-                            <div class="text-2xl mb-1">✓</div>
-                            RESULT
-                        </button>
-                        <button onclick="handleNext()" ${!currentScore ? 'disabled' : ''} class="bg-purple-500 text-white py-4 rounded-xl font-black text-sm hover:bg-purple-600 disabled:bg-gray-400 shadow-lg">
-                            <div class="text-2xl mb-1">→</div>
-                            ${state.currentMission < total - 1 ? 'NEXT' : 'FINISH'}
-                        </button>
-                    </div>
- 
-                    <!-- Progress -->
-                    <div class="flex justify-center gap-2 flex-wrap">
-                        ${missions.map((_, idx) => `
-                            <div class="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${state.missionScores[idx] ? 'bg-green-500 text-white' : idx === state.currentMission ? 'bg-blue-500 text-white' : 'bg-gray-300 text-gray-600'}">
-                                ${idx + 1}
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
- 
-                <!-- Instructions -->
-                <div class="bg-white rounded-xl p-4 mt-3">
-                    <h3 class="font-bold text-gray-800 mb-2">📋 STEPS:</h3>
-                    <ol class="list-decimal list-inside text-sm text-gray-700 space-y-1">
-                        <li>Click <strong class="text-blue-600">LISTEN</strong> to hear pronunciation</li>
-                        <li>Click <strong class="text-green-600">JUDGE</strong> to start recording</li>
-                        <li><strong>Read the sentence</strong> clearly and loudly</li>
-                        <li>Wait for text to appear (green box)</li>
-                        <li>Click <strong class="text-blue-600">RESULT</strong> to see your score</li>
-                        <li>Click <strong class="text-purple-600">NEXT</strong> for next mission</li>
-                    </ol>
-                </div>
-            `;
-        }
- 
-        // ====== ADMIN OVERLAYS (MODALS) ======
-        function renderAdminOverlays() {
-            // Login Modal
-            const login = state.showAdminLogin ? `
-                <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-bold">Guru Login</h3>
-                            <button onclick="closeAdminAll()" class="text-gray-500 hover:text-gray-700">✕</button>
-                        </div>
-                        <div class="space-y-3">
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Username</label>
-                                <input value="${state.adminUser}" oninput="state.adminUser=this.value" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:outline-none focus:border-blue-500"/>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Password</label>
-                                <input type="password" value="${state.adminPass}" oninput="state.adminPass=this.value" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:outline-none focus:border-blue-500"/>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2 pt-2">
-                                <button onclick="closeAdminAll()" class="px-4 py-2 rounded-lg border-2">Cancel</button>
-                                <button onclick="handleAdminLogin()" class="px-4 py-2 rounded-lg bg-blue-600 text-white font-bold">Login</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            ` : '';
- 
-            // Menu / Add / Change Modals (after login)
-            const adminBody = (() => {
-                if (!state.showAdminMenu) return '';
-                if (state.adminView === 'menu') {
-                    return `
-                        <div class="space-y-3">
-                           <button onclick="gotoAdd()" class="w-full px-4 py-3 rounded-lg bg-green-600 text-white font-bold">➕ Add Material</button>
-<button onclick="gotoChange()" class="w-full px-4 py-3 rounded-lg bg-blue-600 text-white font-bold">✏️ Change Material</button>
-<button onclick="gotoChangeChapterUnit()" class="w-full px-4 py-3 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold">🔄 Change Chapter & Unit</button>
-<button onclick="adminLogout()" class="w-full px-4 py-3 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold">Logout</button>
-                        </div>
-                    `;
-                }
-                if (state.adminView === 'add') {
-                    const count = missionsByLevel[state.adminSelectedLevel].length;
-                    return `
-                        <div class="space-y-3">
-                            <div class="flex items-center justify-between">
-                                <h3 class="text-lg font-bold">Add Material</h3>
-                                <div class="flex gap-2">
-                                    <button onclick="gotoAdminMenu()" class="px-3 py-1 rounded-lg border-2">⬅ Back</button>
-                                    <button onclick="adminLogout()" class="px-3 py-1 rounded-lg border-2">Logout</button>
-                                </div>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Level</label>
-                                <select onchange="state.adminSelectedLevel=this.value; render()" class="w-full mt-1 px-3 py-2 border-2 rounded-lg">
-                                    <option value="beginner">Beginner</option>
-                                    <option value="intermediate">Intermediate</option>
-                                    <option value="advanced">Advanced</option>
-                                    <option value="expert">Expert</option>
-                                </select>
-                                <p class="text-xs text-gray-500 mt-1">Current items: <span class="font-bold">${count}</span></p>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Sentence</label>
-                                <textarea oninput="state.adminNewSentence=this.value" placeholder="Type new reading sentence here..." class="w-full mt-1 px-3 py-2 border-2 rounded-lg min-h-[100px]"></textarea>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2">
-                                <button onclick="gotoAdminMenu()" class="px-4 py-2 rounded-lg border-2">Cancel</button>
-                                <button onclick="adminAddMaterial()" class="px-4 py-2 rounded-lg bg-green-600 text-white font-bold">Save</button>
-                            </div>
-                        </div>
-                    `;
-                }
-                if (state.adminView === 'change') {if (state.adminView === 'chapterUnit') {
-    return `
-        <div class="space-y-3">
-            <div class="flex items-center justify-between">
-                <h3 class="text-lg font-bold">Change Chapter & Unit</h3>
-                <button onclick="gotoAdminMenu()" class="px-3 py-1 rounded-lg border-2">⬅ Back</button>
-            </div>
- 
-            <div>
-                <label class="text-sm font-semibold text-gray-700">Chapter:</label>
-                <input value="${state.currentChapter}" oninput="state.currentChapter=this.value" class="w-full px-3 py-2 border-2 rounded-lg" />
-            </div>
- 
-            <div>
-                <label class="text-sm font-semibold text-gray-700">Unit:</label>
-                <input value="${state.currentUnit}" oninput="state.currentUnit=this.value" class="w-full px-3 py-2 border-2 rounded-lg" />
-            </div>
- 
-            <button onclick="saveChapterUnit(); gotoAdminMenu();" class="w-full px-4 py-3 rounded-lg bg-purple-600 text-white font-bold">
-                SAVE
-            </button>
-        </div>
-    `;
-}
-                    const level = state.adminSelectedLevel;
-                    const list = missionsByLevel[level];
-                    return `
-                        <div class="space-y-3">
-                            <div class="flex items-center justify-between">
-                                <h3 class="text-lg font-bold">Change Material</h3>
-                                <div class="flex gap-2">
-                                    <button onclick="gotoAdminMenu()" class="px-3 py-1 rounded-lg border-2">⬅ Back</button>
-                                    <button onclick="adminLogout()" class="px-3 py-1 rounded-lg border-2">Logout</button>
-                                </div>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Level</label>
-                                <select onchange="state.adminSelectedLevel=this.value; state.adminEditIndex=null; state.adminEditValue=''; render()" class="w-full mt-1 px-3 py-2 border-2 rounded-lg">
-                                    <option value="beginner" ${level==='beginner'?'selected':''}>Beginner</option>
-                                    <option value="intermediate" ${level==='intermediate'?'selected':''}>Intermediate</option>
-                                    <option value="advanced" ${level==='advanced'?'selected':''}>Advanced</option>
-                                    <option value="expert" ${level==='expert'?'selected':''}>Expert</option>
-                                </select>
-                                <p class="text-xs text-gray-500 mt-1">Total: <span class="font-bold">${list.length}</span> item(s)</p>
-                            </div>
-                            <div class="max-h-[50vh] overflow-y-auto space-y-2">
-                                ${list.map((item, idx) => `
-                                    <div class="border-2 rounded-lg p-3">
-                                        <div class="text-xs text-gray-500 mb-1">#${idx+1}</div>
-                                        ${
-                                            state.adminEditIndex === idx
-                                            ? `
-                                                <textarea oninput="state.adminEditValue=this.value" class="w-full px-3 py-2 border-2 rounded-lg min-h-[80px]">${state.adminEditValue}</textarea>
-                                                <div class="flex gap-2 mt-2">
-                                                    <button onclick="saveEditMaterial('${level}', ${idx})" class="px-3 py-1 rounded-lg bg-blue-600 text-white font-bold">Save</button>
-                                                    <button onclick="cancelEditMaterial()" class="px-3 py-1 rounded-lg border-2">Cancel</button>
-                                                </div>
-                                            `
-                                            : `
-                                                <p class="text-sm font-semibold text-gray-800">${item}</p>
-                                                <div class="flex gap-2 mt-2">
-                                                    <button onclick="startEditMaterial('${level}', ${idx})" class="px-3 py-1 rounded-lg bg-blue-600 text-white font-bold">Edit</button>
-                                                    <button onclick="adminDeleteMaterial('${level}', ${idx})" class="px-3 py-1 rounded-lg bg-red-600 text-white font-bold">Delete</button>
-                                                </div>
-                                            `
-                                        }
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                    `;
-                }
-                return '';
-            })();
- 
-            const adminModal = state.showAdminMenu ? `
-                <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg">
-                        ${adminBody}
-                    </div>
-                </div>
-            ` : '';
- 
-            return login + adminModal;
-        }
- 
-        function render() {
-            const app = document.getElementById('app');
-            if (state.showForm) {
-                app.innerHTML = renderForm();
-            } else if (state.showFinalScore) {
-                app.innerHTML = renderFinalScore();
-            } else {
-                app.innerHTML = renderMainApp();
-            }
-        }
- 
-// Load saved Chapter & Unit (if available)
-const savedCU = localStorage.getItem('chapter_unit_settings_v1');
-if (savedCU) {
-    const data = JSON.parse(savedCU);
-    state.currentChapter = data.chapter;
-    state.currentUnit = data.unit;
-}
- 
-// Initial render
-render();
-</script>
-</body>
-</html>
-Tags: 
-RAW Paste Data 
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>English Reading Assessment App</title>
+    <title>English Reading Assessment</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: .5; }
-        }
-        .animate-pulse {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
-<body class="bg-gradient-to-br from-blue-500 to-purple-600 min-h-screen p-3">
-    <div id="app" class="max-w-4xl mx-auto"></div>
-
+<body class="bg-gradient-to-br from-blue-600 via-blue-500 to-purple-600 min-h-screen p-3">
+    <div id="app" class="max-w-xl mx-auto"></div>
     <script>
-        // =========================
-        // 🔐 ADMIN CREDENTIALS
-        // =========================
         const ADMIN_USERNAME = 'Unknown';
         const ADMIN_PASSWORD = '123456';
         const STORAGE_KEY = 'reading_missions_v1';
+        const CHAPTER_KEY = 'chapter_unit_v1';
+        const RESULTS_KEY = 'student_results_v1';
 
-        // =========================
-        // 🧩 STATE MANAGEMENT
-        // =========================
         let state = {
-            // student
-            studentName: '',
-            studentClass: '',
-            selectedLevel: '',
-            showForm: true,
-            currentMission: 0,
-            missionScores: Array(7).fill(null), // will be resized after level chosen
-            showFinalScore: false,
-            isSpeaking: false,
-            isRecording: false,
-            transcript: '',
-            showResult: false,
-            recognition: null,
-            errorMessage: '',
-
-            // admin
-            showAdminLogin: false,
-            showAdminMenu: false,
-            adminView: null, // 'menu' | 'add' | 'change'
-            isAdmin: false,
-            adminUser: '',
-            adminPass: '',
-            adminSelectedLevel: 'beginner',
-            adminNewSentence: '',
-            adminEditIndex: null,
-            adminEditValue: '',
-
-currentChapter: 'Chapter 2: Taking Trips',
-currentUnit: 'Unit 2: What an Experience',
+            studentName: '', studentClass: '', selectedLevel: '', showForm: true,
+            currentMission: 0, missionScores: [], showFinalScore: false,
+            isSpeaking: false, isRecording: false, transcript: '', showResult: false,
+            recognition: null, errorMessage: '', showAdminLogin: false, showAdminMenu: false,
+            adminView: null, adminUser: '', adminPass: '',
+            adminSelectedLevel: 'beginner', adminNewSentence: '', adminEditIndex: null, adminEditValue: '',
+            chapterTitle: 'Chapter 2: Taking Trips', unitTitle: 'Unit 2: What an Experience',
+            filterLevel: 'all', filterClass: '', searchName: ''
         };
 
-        // =========================
-        // 📚 DEFAULT MISSIONS (BASE)
-        // =========================
         const defaultMissions = {
             beginner: [
                 "I love to travel and see new places",
@@ -984,56 +41,17 @@ currentUnit: 'Unit 2: What an Experience',
                 "I had an amazing experience during my trip to Bali",
                 "The view from the mountain top was absolutely breathtaking",
                 "We explored ancient temples and learned about local culture",
-                "Swimming in the crystal clear water was unforgettable",
-                "The traditional dance performance was truly spectacular",
-                "Meeting friendly locals made our journey more meaningful",
-                "This vacation created wonderful memories that will last forever"
+                "Swimming in the crystal clear water was unforgettable"
             ],
             advanced: [
-                "Embarking on this extraordinary adventure provided invaluable insights into diverse cultures",
-                "The magnificent landscape encompassed towering peaks and pristine valleys below",
-                "Our expedition through historical landmarks revealed fascinating architectural achievements",
-                "Experiencing authentic cuisine while interacting with indigenous communities was remarkable",
-                "The mesmerizing performance showcased centuries-old traditions passed through generations",
-                "Establishing connections with welcoming inhabitants enriched our understanding significantly",
-                "This remarkable journey profoundly transformed our perspectives on global diversity"
+                "Embarking on this extraordinary adventure provided invaluable insights",
+                "The magnificent landscape encompassed towering peaks and pristine valleys"
             ],
             expert: [
-                "Traversing through this unprecedented expedition yielded profound comprehension of multifaceted civilizations",
-                "The awe-inspiring topography encompassed monumental summits and immaculate geological formations",
-                "Our archaeological investigation unveiled extraordinary testimonials of sophisticated engineering methodologies",
-                "Encountering gastronomic authenticity whilst engaging with aboriginal populations proved extraordinarily enlightening",
-                "The captivating theatrical presentation exemplified antiquated customs meticulously preserved across millennia",
-                "Cultivating meaningful rapport with hospitable denizens substantially augmented our anthropological cognizance",
-                "This transformative odyssey fundamentally revolutionized our philosophical paradigms regarding intercultural dynamics"
+                "Traversing through this unprecedented expedition yielded profound comprehension"
             ]
         };
 
-        // =========================
-        // 💾 LOCAL STORAGE HELPERS
-        // =========================
-        function loadMissions() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                if (!raw) return JSON.parse(JSON.stringify(defaultMissions));
-                const parsed = JSON.parse(raw);
-                // safety: ensure all levels exist
-                for (const key of ['beginner','intermediate','advanced','expert']) {
-                    if (!Array.isArray(parsed[key])) parsed[key] = [...defaultMissions[key]];
-                }
-                return parsed;
-            } catch {
-                return JSON.parse(JSON.stringify(defaultMissions));
-            }
-        }
-        function saveMissions(missions) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(missions));
-        }
-        let missionsByLevel = loadMissions(); // source of truth
-
-        // =========================
-        // 🏁 SCORING THRESHOLDS
-        // =========================
         const scoringThresholds = {
             beginner: { excellent: 70, good: 50, enough: 30 },
             intermediate: { excellent: 80, good: 60, enough: 35 },
@@ -1041,775 +59,822 @@ currentUnit: 'Unit 2: What an Experience',
             expert: { excellent: 95, good: 75, enough: 50 }
         };
 
-        // =========================
-        // 🎤 SPEECH RECOGNITION
-        // =========================
-        function initializeSpeechRecognition() {
-            if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-                state.errorMessage = '❌ Browser tidak mendukung Speech Recognition. Gunakan Chrome!';
-                return false;
-            }
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            const recognition = new SpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.lang = 'en-US';
-            recognition.maxAlternatives = 1;
+        function loadMissions() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return JSON.parse(JSON.stringify(defaultMissions));
+                return JSON.parse(raw);
+            } catch { return JSON.parse(JSON.stringify(defaultMissions)); }
+        }
+        
+        function loadChapterUnit() {
+            try {
+                const raw = localStorage.getItem(CHAPTER_KEY);
+                if (!raw) return { chapter: 'Chapter 2: Taking Trips', unit: 'Unit 2: What an Experience' };
+                return JSON.parse(raw);
+            } catch { return { chapter: 'Chapter 2: Taking Trips', unit: 'Unit 2: What an Experience' }; }
+        }
+        
+        function loadResults() {
+            try {
+                const raw = localStorage.getItem(RESULTS_KEY);
+                if (!raw) return [];
+                return JSON.parse(raw);
+            } catch { return []; }
+        }
+        
+        function saveResults(results) {
+            localStorage.setItem(RESULTS_KEY, JSON.stringify(results));
+        }
+        
+        function saveChapterUnit(ch, un) {
+            localStorage.setItem(CHAPTER_KEY, JSON.stringify({ chapter: ch, unit: un }));
+        }
+        
+        function saveMissions(m) { 
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(m)); 
+        }
+        
+        let missionsByLevel = loadMissions();
+        const saved = loadChapterUnit();
+        state.chapterTitle = saved.chapter;
+        state.unitTitle = saved.unit;
 
-            recognition.onstart = () => { state.isRecording = true; state.errorMessage=''; render(); };
-            recognition.onresult = (event) => {
-                const spokenText = event.results[0][0].transcript;
-                state.transcript = spokenText;
-                state.isRecording = false;
-                state.errorMessage = '';
-                render();
+        function initSpeech() {
+            if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) return false;
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const r = new SR();
+            r.continuous = false; 
+            r.interimResults = false; 
+            r.lang = 'en-US';
+            r.onstart = () => { state.isRecording = true; render(); };
+            r.onresult = (e) => { 
+                state.transcript = e.results[0][0].transcript; 
+                state.isRecording = false; 
+                render(); 
             };
-            recognition.onerror = (event) => {
-                state.isRecording = false;
-                if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-                    state.errorMessage = '❌ Microphone ditolak! Buka Settings > Site settings > Microphone > Allow';
-                } else if (event.error === 'no-speech') {
-                    state.errorMessage = '⚠️ Tidak ada suara terdeteksi. Coba lagi dan bicara lebih keras!';
-                } else if (event.error === 'aborted') {
-                    state.errorMessage = '⚠️ Recording dibatalkan. Coba lagi!';
-                } else {
-                    state.errorMessage = '❌ Error: ' + event.error;
-                }
-                render();
-            };
-            recognition.onend = () => { state.isRecording = false; render(); };
-            state.recognition = recognition;
+            r.onerror = () => { state.isRecording = false; render(); };
+            r.onend = () => { state.isRecording = false; render(); };
+            state.recognition = r;
             return true;
         }
 
-        async function testMicrophone() {
+        async function testMic() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(track => track.stop());
-                alert('✅ MICROPHONE BERHASIL!\n\nSekarang Anda bisa:\n1. Klik LISTEN untuk mendengar\n2. Klik JUDGE untuk merekam\n3. Klik RESULT untuk nilai');
-                state.errorMessage = '✅ Microphone OK! Siap digunakan.';
-                render();
-            } catch (error) {
-                alert('❌ MICROPHONE TIDAK DAPAT DIAKSES!\n\nCara mengizinkan:\n\n📱 ANDROID:\n1. Tap 3 titik (⋮)\n2. Tap "Site settings"\n3. Tap "Microphone"\n4. Pilih "Allow"\n5. Refresh (F5)');
-                state.errorMessage = '❌ Microphone ditolak!';
-                render();
+                const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                s.getTracks().forEach(t => t.stop());
+                alert('✅ MICROPHONE BERHASIL!');
+            } catch { 
+                alert('❌ MICROPHONE DITOLAK!'); 
             }
         }
 
-        // =========================
-        // 🧮 ASSESSMENT LOGIC
-        // =========================
-        function handleStartAssessment() {
-            const name = document.getElementById('studentName').value.trim();
-            const className = document.getElementById('studentClass').value.trim();
-            const level = document.getElementById('level').value;
-
-            if (!name || !className) { alert('⚠️ Mohon isi Nama dan Kelas!'); return; }
-            if (!level) { alert('⚠️ Mohon pilih Level Kesulitan!'); return; }
-
-            state.studentName = name;
-            state.studentClass = className;
-            state.selectedLevel = level;
-            state.showForm = false;
-
-            // Resize missionScores dynamically to the number of missions in the selected level (Mode A)
-            const totalMissions = missionsByLevel[state.selectedLevel].length;
-            state.missionScores = Array(totalMissions).fill(null);
-
-            if (!initializeSpeechRecognition()) {
-                alert('❌ Browser tidak mendukung Speech Recognition!');
+        function handleStart() {
+            const n = document.getElementById('studentName').value.trim();
+            const c = document.getElementById('studentClass').value.trim();
+            const l = document.getElementById('level').value;
+            if (!n || !c || !l) { 
+                alert('⚠️ Lengkapi semua field!'); 
+                return; 
             }
+            state.studentName = n; 
+            state.studentClass = c; 
+            state.selectedLevel = l; 
+            state.showForm = false;
+            state.missionScores = Array(missionsByLevel[l].length).fill(null);
+            initSpeech();
             render();
         }
 
         function speakText() {
-            if (window.speechSynthesis.speaking) {
-                window.speechSynthesis.cancel();
-                state.isSpeaking = false;
-                render();
-                return;
+            if (window.speechSynthesis.speaking) { 
+                window.speechSynthesis.cancel(); 
+                state.isSpeaking = false; 
+                render(); 
+                return; 
             }
-            window.speechSynthesis.cancel();
-            const missions = missionsByLevel[state.selectedLevel];
-            setTimeout(() => {
-                const utterance = new SpeechSynthesisUtterance(missions[state.currentMission]);
-                utterance.lang = 'en-US';
-                utterance.rate = 0.6;
-                utterance.pitch = 1.0;
-                utterance.volume = 1.0;
-                utterance.onstart = () => { state.isSpeaking = true; render(); };
-                utterance.onend = () => { state.isSpeaking = false; render(); };
-                utterance.onerror = () => { state.isSpeaking = false; render(); };
-                window.speechSynthesis.speak(utterance);
-            }, 100);
+            const u = new SpeechSynthesisUtterance(missionsByLevel[state.selectedLevel][state.currentMission]);
+            u.lang = 'en-US'; 
+            u.rate = 0.6;
+            u.onstart = () => { state.isSpeaking = true; render(); };
+            u.onend = () => { state.isSpeaking = false; render(); };
+            window.speechSynthesis.speak(u);
         }
 
         function handleJudge() {
-            if (!state.recognition) { alert('❌ Speech Recognition tidak tersedia!'); return; }
-            state.transcript = '';
+            if (!state.recognition) return;
+            state.transcript = ''; 
             state.showResult = false;
-            state.errorMessage = '';
-            try {
-                state.recognition.start();
-            } catch (error) {
-                if (error.message && error.message.includes('already started')) {
-                    state.recognition.stop();
-                    setTimeout(() => {
-                        try { state.recognition.start(); }
-                        catch { state.errorMessage = '❌ Gagal memulai recording.'; render(); }
-                    }, 500);
-                } else {
-                    state.errorMessage = '❌ Gagal memulai recording.';
-                    render();
-                }
-            }
+            try { 
+                state.recognition.start(); 
+            } catch {}
         }
 
-        function calculateScore(original, spoken, level) {
-            if (!spoken || spoken.trim() === '') return 'Bad';
-            const normalize = (text) => text.toLowerCase().replace(/[.,!?'"]/g, '').replace(/\s+/g, ' ').trim();
-            const originalWords = normalize(original).split(' ');
-            const spokenWords = normalize(spoken).split(' ');
-            let matches = 0;
-            originalWords.forEach(word => { if (spokenWords.includes(word)) matches++; });
-            const accuracy = (matches / originalWords.length) * 100;
-            const thresholds = scoringThresholds[level];
-            if (accuracy >= thresholds.excellent) return 'Excellent';
-            if (accuracy >= thresholds.good) return 'Good';
-            if (accuracy >= thresholds.enough) return 'Enough';
+        function calculateScore(orig, spk, lvl) {
+            if (!spk) return 'Bad';
+            const norm = t => t.toLowerCase().replace(/[.,!?'"]/g, '').trim();
+            const ow = norm(orig).split(' ');
+            const sw = norm(spk).split(' ');
+            let m = 0;
+            ow.forEach(w => { if (sw.includes(w)) m++; });
+            const acc = (m / ow.length) * 100;
+            const th = scoringThresholds[lvl];
+            if (acc >= th.excellent) return 'Excellent';
+            if (acc >= th.good) return 'Good';
+            if (acc >= th.enough) return 'Enough';
             return 'Bad';
         }
 
         function handleResult() {
-            if (!state.transcript || state.transcript.trim() === '') {
-                alert('⚠️ BELUM ADA REKAMAN!\n\n1. Klik JUDGE\n2. Baca kalimat\n3. Tunggu teks muncul\n4. Klik RESULT');
-                return;
+            if (!state.transcript) { 
+                alert('⚠️ Klik JUDGE dulu!'); 
+                return; 
             }
-            const missions = missionsByLevel[state.selectedLevel];
-            const score = calculateScore(missions[state.currentMission], state.transcript, state.selectedLevel);
+            const score = calculateScore(
+                missionsByLevel[state.selectedLevel][state.currentMission], 
+                state.transcript, 
+                state.selectedLevel
+            );
             state.missionScores[state.currentMission] = score;
             state.showResult = true;
             render();
         }
 
         function handleNext() {
-            if (!state.missionScores[state.currentMission]) { alert('⚠️ Klik RESULT dulu untuk mendapat nilai!'); return; }
+            if (!state.missionScores[state.currentMission]) { 
+                alert('⚠️ Klik RESULT dulu!'); 
+                return; 
+            }
             const total = missionsByLevel[state.selectedLevel].length;
             if (state.currentMission < total - 1) {
-                state.currentMission++;
-                state.transcript = '';
+                state.currentMission++; 
+                state.transcript = ''; 
                 state.showResult = false;
-                state.errorMessage = '';
-            } else {
-                state.showFinalScore = true;
+            } else { 
+                saveStudentResult();
+                state.showFinalScore = true; 
             }
             render();
         }
+        
+        function saveStudentResult() {
+            const results = loadResults();
+            const finalScore = getFinalScore();
+            const finalGrade = getFinalGrade(finalScore);
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('id-ID');
+            const timeStr = now.toLocaleTimeString('id-ID');
+            
+            results.push({
+                id: Date.now(),
+                name: state.studentName,
+                class: state.studentClass,
+                level: state.selectedLevel,
+                score: finalScore,
+                grade: finalGrade,
+                date: dateStr,
+                time: timeStr,
+                chapter: state.chapterTitle,
+                unit: state.unitTitle,
+                missionScores: [...state.missionScores]
+            });
+            
+            saveResults(results);
+        }
 
-        function calculateFinalScore() {
-            const scoreValues = { 'Excellent': 100, 'Good': 75, 'Enough': 50, 'Bad': 25 };
+        function getFinalScore() {
+            const sv = { 'Excellent': 100, 'Good': 75, 'Enough': 50, 'Bad': 25 };
             const total = missionsByLevel[state.selectedLevel].length || 1;
-            const sum = state.missionScores.reduce((s, sc) => s + (scoreValues[sc] || 0), 0);
+            const sum = state.missionScores.reduce((s, sc) => s + (sv[sc] || 0), 0);
             return Math.round(sum / total);
         }
 
-        function getFinalGrade(avgScore) {
-            if (avgScore >= 85) return 'Excellent';
-            if (avgScore >= 65) return 'Good';
-            if (avgScore >= 40) return 'Enough';
+        function getFinalGrade(avg) {
+            if (avg >= 85) return 'Excellent';
+            if (avg >= 65) return 'Good';
+            if (avg >= 40) return 'Enough';
             return 'Bad';
         }
 
-        function getScoreColor(score) {
-            const colors = {
-                'Excellent': 'bg-green-500 text-white border-green-600',
-                'Good': 'bg-blue-500 text-white border-blue-600',
-                'Enough': 'bg-yellow-500 text-white border-yellow-600',
-                'Bad': 'bg-red-500 text-white border-red-600'
+        function getScoreColor(s) {
+            const c = {
+                'Excellent': 'bg-green-500 text-white', 
+                'Good': 'bg-blue-500 text-white', 
+                'Enough': 'bg-yellow-500 text-white', 
+                'Bad': 'bg-red-500 text-white'
             };
-            return colors[score] || 'bg-gray-500 text-white border-gray-600';
+            return c[s] || 'bg-gray-500 text-white';
         }
 
-        function getScoreColorLight(score) {
-            const colors = {
-                'Excellent': 'text-green-700 bg-green-100 border-green-400',
-                'Good': 'text-blue-700 bg-blue-100 border-blue-400',
-                'Enough': 'text-yellow-700 bg-yellow-100 border-yellow-400',
-                'Bad': 'text-red-700 bg-red-100 border-red-400'
+        function getScoreColorLight(s) {
+            const c = {
+                'Excellent': 'text-green-700 bg-green-100 border-2 border-green-400', 
+                'Good': 'text-blue-700 bg-blue-100 border-2 border-blue-400', 
+                'Enough': 'text-yellow-700 bg-yellow-100 border-2 border-yellow-400', 
+                'Bad': 'text-red-700 bg-red-100 border-2 border-red-400'
             };
-            return colors[score] || 'text-gray-700 bg-gray-100 border-gray-400';
+            return c[s] || 'text-gray-700 bg-gray-100';
         }
 
-        function getLevelBadgeColor(level) {
-            const colors = { beginner: 'bg-green-500', intermediate: 'bg-blue-500', advanced: 'bg-purple-500', expert: 'bg-red-500' };
-            return colors[level] || 'bg-gray-500';
+        function getLevelColor(l) {
+            const c = { 
+                beginner: 'bg-green-500', 
+                intermediate: 'bg-blue-500', 
+                advanced: 'bg-purple-500', 
+                expert: 'bg-red-500' 
+            };
+            return c[l] || 'bg-gray-500';
         }
 
-        function getLevelName(level) {
-            const names = { beginner: '🌱 BEGINNER', intermediate: '🌿 INTERMEDIATE', advanced: '🌳 ADVANCED', expert: '🏆 EXPERT' };
-            return names[level] || level;
+        function getLevelName(l) {
+            const n = { 
+                beginner: '🌱 BEGINNER', 
+                intermediate: '🌿 INTERMEDIATE', 
+                advanced: '🌳 ADVANCED', 
+                expert: '🏆 EXPERT' 
+            };
+            return n[l] || l;
         }
 
         function restartApp() {
-            state = {
-                studentName: '',
-                studentClass: '',
-                selectedLevel: '',
-                showForm: true,
-                currentMission: 0,
-                missionScores: Array(7).fill(null),
-                showFinalScore: false,
-                isSpeaking: false,
-                isRecording: false,
-                transcript: '',
-                showResult: false,
-                recognition: null,
-                errorMessage: '',
-                // admin
-                showAdminLogin: false,
-                showAdminMenu: false,
-                adminView: null,
-                isAdmin: false,
-                adminUser: '',
-                adminPass: '',
-                adminSelectedLevel: 'beginner',
-                adminNewSentence: '',
-                adminEditIndex: null,
-                adminEditValue: '',
-            };
+            state.showForm = true; 
+            state.showFinalScore = false; 
+            state.currentMission = 0; 
+            state.transcript = ''; 
+            state.showResult = false; 
+            state.missionScores = [];
             render();
+        }
+        
+        function exitToHome() {
+            if (confirm('⚠️ Keluar dari Reading Test?\n\nProgress Anda akan hilang!')) {
+                state.showForm = true; 
+                state.showFinalScore = false; 
+                state.currentMission = 0; 
+                state.transcript = ''; 
+                state.showResult = false; 
+                state.missionScores = [];
+                state.studentName = '';
+                state.studentClass = '';
+                state.selectedLevel = '';
+                render();
+            }
         }
 
-        // =========================
-        // 🔧 ADMIN FUNCTIONS
-        // =========================
-        function openAdmin() {
-            state.showAdminLogin = true;
-            state.showAdminMenu = false;
-            state.adminView = null;
-            render();
+        function openAdmin() { 
+            state.showAdminLogin = true; 
+            render(); 
         }
-        function closeAdminAll() {
-            state.showAdminLogin = false;
-            state.showAdminMenu = false;
-            state.adminView = null;
-            state.isAdmin = false;
-            state.adminUser = '';
-            state.adminPass = '';
-            state.adminNewSentence = '';
-            state.adminEditIndex = null;
-            state.adminEditValue = '';
-            render();
+        
+        function closeAdmin() { 
+            state.showAdminLogin = false; 
+            state.showAdminMenu = false; 
+            state.adminView = null; 
+            state.adminUser = ''; 
+            state.adminPass = ''; 
+            render(); 
         }
-        function handleAdminLogin() {
+        
+        function handleLogin() {
             if (state.adminUser === ADMIN_USERNAME && state.adminPass === ADMIN_PASSWORD) {
-                state.isAdmin = true;
-                state.showAdminLogin = false;
-                state.showAdminMenu = true;
+                state.showAdminLogin = false; 
+                state.showAdminMenu = true; 
                 state.adminView = 'menu';
-            } else {
-                alert('❌ Username atau Password salah.');
+            } else { 
+                alert('❌ Salah!'); 
             }
             render();
         }
-        function gotoAdminMenu() { state.showAdminMenu = true; state.adminView = 'menu'; render(); }
-        function gotoAdd() { state.showAdminMenu = true; state.adminView = 'add'; render(); }
-        function gotoChangeChapterUnit() {
-    state.adminView = 'chapterUnit';
-    render();
-}
-        function adminLogout() { closeAdminAll(); }
-
-        function adminAddMaterial() {
+        
+        function gotoMenu() { 
+            state.adminView = 'menu'; 
+            render(); 
+        }
+        
+        function gotoAdd() { 
+            state.adminView = 'add'; 
+            render(); 
+        }
+        
+        function gotoChange() { 
+            state.adminView = 'change'; 
+            render(); 
+        }
+        
+        function gotoChapter() { 
+            state.adminView = 'chapter'; 
+            render(); 
+        }
+        
+        function gotoStudentList() {
+            state.adminView = 'students';
+            state.filterLevel = 'all';
+            state.filterClass = '';
+            state.searchName = '';
+            render();
+        }
+        
+        function updateChapter() {
+            const ch = document.getElementById('chInput').value.trim();
+            const un = document.getElementById('unInput').value.trim();
+            if (ch && un) {
+                state.chapterTitle = ch; 
+                state.unitTitle = un;
+                saveChapterUnit(ch, un);
+                alert('✅ Berhasil!');
+                render();
+            }
+        }
+        
+        function addMaterial() {
             const txt = (state.adminNewSentence || '').trim();
-            if (!txt) { alert('Kalimat tidak boleh kosong.'); return; }
+            if (!txt) { 
+                alert('Kosong!'); 
+                return; 
+            }
             missionsByLevel[state.adminSelectedLevel].push(txt);
             saveMissions(missionsByLevel);
             state.adminNewSentence = '';
-            alert('✅ Materi berhasil ditambahkan.');
+            alert('✅ Ditambahkan!');
             render();
         }
-
-        function adminDeleteMaterial(level, index) {function saveChapterUnit() {
-    localStorage.setItem('chapter_unit_settings_v1', JSON.stringify({
-        chapter: state.currentChapter,
-        unit: state.currentUnit
-    }));
-    alert('✅ Chapter & Unit berhasil diperbarui!');
-    render();
-}
-            if (!confirm('Hapus materi ini?')) return;
-            missionsByLevel[level].splice(index, 1);
+        
+        function deleteMaterial(lvl, idx) {
+            if (!confirm('Hapus?')) return;
+            missionsByLevel[lvl].splice(idx, 1);
             saveMissions(missionsByLevel);
-            // if currently active level affected during assessment, adjust safely:
-            if (!state.showForm && state.selectedLevel === level) {
-                const total = missionsByLevel[level].length;
-                state.missionScores = state.missionScores.slice(0, total);
-                if (state.currentMission >= total) state.currentMission = Math.max(0, total - 1);
-            }
             render();
         }
-
-        function startEditMaterial(level, index) {
-            state.adminEditIndex = index;
-            state.adminEditValue = missionsByLevel[level][index];
-            render();
+        
+        function startEdit(lvl, idx) { 
+            state.adminEditIndex = idx; 
+            state.adminEditValue = missionsByLevel[lvl][idx]; 
+            render(); 
         }
-        function cancelEditMaterial() {
-            state.adminEditIndex = null;
-            state.adminEditValue = '';
-            render();
+        
+        function cancelEdit() { 
+            state.adminEditIndex = null; 
+            state.adminEditValue = ''; 
+            render(); 
         }
-        function saveEditMaterial(level, index) {
+        
+        function saveEdit(lvl, idx) {
             const txt = (state.adminEditValue || '').trim();
-            if (!txt) { alert('Kalimat tidak boleh kosong.'); return; }
-            missionsByLevel[level][index] = txt;
+            if (!txt) { 
+                alert('Kosong!'); 
+                return; 
+            }
+            missionsByLevel[lvl][idx] = txt;
             saveMissions(missionsByLevel);
-            state.adminEditIndex = null;
+            state.adminEditIndex = null; 
             state.adminEditValue = '';
-            alert('✅ Materi diperbarui.');
+            alert('✅ Diperbarui!');
             render();
         }
-
-        // =========================
-        // 🖼️ RENDERING
-        // =========================
-        function renderForm() {
-            // ••• menu button top-right (only on form page)
-            const adminButton = `
-                <div class="flex justify-end mb-2">
-                    <button onclick="openAdmin()" class="text-white/90 hover:text-white bg-white/10 hover:bg-white/20 backdrop-blur px-3 py-1 rounded-lg text-xl leading-none">⋮</button>
-                </div>
-            `;
-            return `
-                <div class="min-h-screen flex items-center justify-center p-4">
-                    <div class="w-full max-w-md">
-                        ${adminButton}
-                        <div class="bg-white rounded-2xl shadow-2xl p-8">
-                            <div class="text-center mb-6">
-                                <div class="text-6xl mb-3">📚</div>
-                                <h1 class="text-2xl font-bold text-gray-800 mb-2">English Reading Assessment</h1>
-                                <p class="text-sm text-gray-600">${state.currentChapter} - ${state.currentUnit}</p>
-                            </div>
-
-                            <div class="space-y-4 mb-6">
-                                <div>
-                                    <label class="block text-sm font-bold text-gray-700 mb-2">👤 Student Name / Nama Siswa:</label>
-                                    <input type="text" id="studentName" placeholder="Enter your name"
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-base"/>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-bold text-gray-700 mb-2">🏫 Class / Kelas:</label>
-                                    <input type="text" id="studentClass" placeholder="e.g., 7A, 8B, IX-1"
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-base"/>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-bold text-gray-700 mb-3">🎯 Difficulty Level / Tingkat Kesulitan:</label>
-                                    <select id="level"
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-base font-semibold bg-white">
-                                        <option value="">-- Select Level --</option>
-                                        <option value="beginner">🌱 BEGINNER (Easy - Excellent ≥70%)</option>
-                                        <option value="intermediate">🌿 INTERMEDIATE (Normal - Excellent ≥80%)</option>
-                                        <option value="advanced">🌳 ADVANCED (Hard - Excellent ≥88%)</option>
-                                        <option value="expert">🏆 EXPERT (Very Hard - Excellent ≥95%)</option>
-                                    </select>
-                                </div>
-                                <div class="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3">
-                                    <p class="text-xs text-yellow-800 font-semibold">⚠️ <strong>Perhatian:</strong> Semakin tinggi level, semakin susah mendapat nilai Excellent!</p>
-                                </div>
-                            </div>
-
-                            <button onclick="handleStartAssessment()"
-                                class="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white py-4 rounded-lg font-bold text-lg hover:from-blue-600 hover:to-purple-700 shadow-lg transform hover:scale-105 transition">
-                                🚀 Start Assessment
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                ${renderAdminOverlays()}
-            `;
+        
+        function deleteResult(id) {
+            if (!confirm('Hapus data siswa ini?')) return;
+            const results = loadResults();
+            const filtered = results.filter(r => r.id !== id);
+            saveResults(filtered);
+            alert('✅ Data dihapus!');
+            render();
         }
-
-        function renderFinalScore() {
-            const finalScore = calculateFinalScore();
-            const finalGrade = getFinalGrade(finalScore);
-            const thresholds = scoringThresholds[state.selectedLevel];
-            return `
-                <div class="min-h-screen flex items-center justify-center p-4">
-                    <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-2xl w-full">
-                        <div class="text-center mb-6">
-                            <div class="text-6xl mb-3">🏆</div>
-                            <h1 class="text-3xl font-bold text-gray-800 mb-1">Assessment Complete!</h1>
-                            <p class="text-gray-600">All missions completed</p>
-                        </div>
-
-                        <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-5 mb-4 border-2 border-blue-300">
-                            <div class="grid grid-cols-2 gap-4 mb-3">
-                                <div class="text-center border-r border-blue-300 pr-3">
-                                    <p class="text-xs text-gray-500 font-bold mb-2 uppercase">Student Name</p>
-                                    <p class="text-lg font-black text-gray-800">${state.studentName}</p>
-                                </div>
-                                <div class="text-center pl-3">
-                                    <p class="text-xs text-gray-500 font-bold mb-2 uppercase">Class</p>
-                                    <p class="text-lg font-black text-gray-800">${state.studentClass}</p>
-                                </div>
-                            </div>
-                            <div class="text-center pt-3 border-t border-blue-300">
-                                <p class="text-xs text-gray-500 font-bold mb-2 uppercase">Difficulty Level</p>
-                                <span class="${getLevelBadgeColor(state.selectedLevel)} text-white px-4 py-2 rounded-lg font-black text-sm">
-                                    ${getLevelName(state.selectedLevel)}
-                                </span>
-                                <p class="text-xs text-gray-600 mt-2">Excellent threshold: ≥${thresholds.excellent}%</p>
-                            </div>
-                        </div>
-
-                        <div class="bg-gradient-to-r from-purple-100 to-pink-100 rounded-xl p-6 mb-5">
-                            <h2 class="text-xl font-semibold text-center mb-3">Final Score</h2>
-                            <div class="text-5xl font-bold text-center text-purple-600 mb-2">${finalScore}</div>
-                            <div class="text-2xl font-bold text-center py-3 px-4 rounded-lg border-2 ${getScoreColorLight(finalGrade)}">
-                                ${finalGrade}
-                            </div>
-                        </div>
-
-                        <div class="space-y-2 mb-5">
-                            <h3 class="font-semibold text-gray-700 mb-2">Score per Mission:</h3>
-                            ${state.missionScores.map((score, idx) => `
-                                <div class="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
-                                    <span class="text-gray-700 font-medium">Mission ${idx + 1}</span>
-                                    <span class="font-bold px-4 py-1 rounded border-2 ${getScoreColorLight(score)}">
-                                        ${score}
-                                    </span>
-                                </div>
-                            `).join('')}
-                        </div>
-
-                        <button onclick="restartApp()"
-                            class="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 rounded-lg font-bold hover:from-purple-600 hover:to-pink-600 text-lg shadow-lg">
-                            🔄 Start New Assessment
-                        </button>
-                    </div>
-                </div>
-            `;
+        
+        function clearAllResults() {
+            if (!confirm('HAPUS SEMUA DATA SISWA?\n\nPeringatan: Tindakan ini tidak dapat dibatalkan!')) return;
+            if (!confirm('Apakah Anda yakin? Data akan hilang permanent!')) return;
+            saveResults([]);
+            alert('✅ Semua data telah dihapus!');
+            render();
         }
-
-        function renderMainApp() {
-            const missions = missionsByLevel[state.selectedLevel];
-            const total = missions.length;
-            const currentScore = state.missionScores[state.currentMission];
-            const thresholds = scoringThresholds[state.selectedLevel];
-
-            return `
-                <!-- Student Info -->
-                <div class="bg-white rounded-xl p-4 mb-3 shadow-lg border-2 border-blue-300">
-                    <div class="grid grid-cols-2 gap-4 mb-3">
-                        <div class="border-r border-gray-300 pr-3">
-                            <p class="text-xs text-gray-500 font-semibold mb-1 uppercase">Student Name</p>
-                            <p class="text-base text-gray-800 font-bold truncate">${state.studentName}</p>
-                        </div>
-                        <div class="pl-3">
-                            <p class="text-xs text-gray-500 font-semibold mb-1 uppercase">Class</p>
-                            <p class="text-base text-gray-800 font-bold">${state.studentClass}</p>
-                        </div>
-                    </div>
-                    <div class="text-center pt-3 border-t border-gray-300">
-                        <span class="${getLevelBadgeColor(state.selectedLevel)} text-white px-3 py-1 rounded-lg font-bold text-xs">
-                            ${getLevelName(state.selectedLevel)}
-                        </span>
-                        <p class="text-xs text-gray-600 mt-1">
-                            Excellent: ≥${thresholds.excellent}% | Good: ≥${thresholds.good}% | Enough: ≥${thresholds.enough}%</p>
-                    </div>
-                </div>
-
-                <!-- Test Microphone Button -->
-                <button onclick="testMicrophone()"
-                    class="w-full bg-gradient-to-r from-green-500 to-blue-500 text-white py-3 px-4 rounded-xl font-black text-base hover:from-green-600 hover:to-blue-600 mb-3 shadow-lg flex items-center justify-center gap-2">
-                    <span class="text-2xl">🎤</span>
-                    TEST MICROPHONE (KLIK INI DULU!)
-                </button>
-
-                <!-- Error Message -->
-                ${state.errorMessage ? `
-                    <div class="bg-${state.errorMessage.includes('✅') ? 'green' : 'red'}-50 border-2 border-${state.errorMessage.includes('✅') ? 'green' : 'red'}-400 rounded-xl p-3 mb-3">
-                        <p class="text-${state.errorMessage.includes('✅') ? 'green' : 'red'}-800 font-bold text-sm text-center">${state.errorMessage}</p>
-                    </div>
-                ` : ''}
-
-                <div class="bg-white rounded-2xl shadow-2xl p-5">
-                    <!-- Header -->
-                    <div class="text-center mb-4">
-                        <h1 class="text-xl font-bold text-gray-800 mb-1">📚 English Reading Test</h1>
-                        <p class="text-xs text-gray-600 font-semibold">${state.currentChapter} - ${state.currentUnit}</p>
-                        <p class="text-lg text-gray-800 font-bold mt-2">Mission ${state.currentMission + 1} of ${total}</p>
-                        <div class="w-full bg-gray-200 rounded-full h-3 mt-2">
-                            <div class="bg-gradient-to-r from-blue-500 to-purple-600 h-3 rounded-full transition-all" style="width: ${((state.currentMission + 1) / total) * 100}%"></div>
-                        </div>
-                    </div>
-
-                    <!-- Mission Text -->
-                    <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-4 mb-4 border-2 border-blue-300">
-                        <div class="flex justify-between items-start mb-3">
-                            <h2 class="text-sm font-bold text-gray-800">📖 Read this:</h2>
-                            <button onclick="speakText()" class="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm shadow-lg transition ${state.isSpeaking ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white'}">
-                                🔊 ${state.isSpeaking ? 'STOP' : 'LISTEN'}
-                            </button>
-                        </div>
-                        <p class="text-base text-gray-800 leading-relaxed font-semibold">"${missions[state.currentMission]}"</p>
-                    </div>
-
-                    <!-- Recording Status -->
-                    ${state.isRecording ? `
-                        <div class="bg-red-50 border-2 border-red-500 rounded-xl p-4 mb-4 text-center animate-pulse">
-                            <div class="text-5xl mb-2">🎤</div>
-                            <p class="text-red-800 font-black text-lg">RECORDING...</p>
-                            <p class="text-red-600 font-bold text-sm">Speak clearly now!</p>
-                        </div>
-                    ` : ''}
-
-                    <!-- Transcript -->
-                    ${state.transcript ? `
-                        <div class="bg-green-50 border-2 border-green-500 rounded-xl p-4 mb-4">
-                            <p class="text-xs text-green-700 font-bold mb-2">✅ YOUR RECORDING:</p>
-                            <p class="text-sm text-gray-800 font-semibold italic">"${state.transcript}"</p>
-                            <p class="text-xs text-green-600 mt-2 font-bold">👉 Click RESULT to get score</p>
-                        </div>
-                    ` : ''}
-
-                    <!-- Score Display -->
-                    ${state.showResult && currentScore ? `
-                        <div class="rounded-xl p-5 mb-4 text-center border-4 shadow-xl ${getScoreColor(currentScore)}">
-                            <div class="text-5xl mb-2">✓</div>
-                            <p class="text-sm font-bold mb-1">YOUR SCORE:</p>
-                            <p class="text-4xl font-black mb-2">${currentScore}</p>
-                        </div>
-                    ` : ''}
-
-                    <!-- Action Buttons -->
-                    <div class="grid grid-cols-3 gap-3 mb-4">
-                        <button onclick="handleJudge()" ${state.isRecording ? 'disabled' : ''} class="bg-green-500 text-white py-4 rounded-xl font-black text-sm hover:bg-green-600 disabled:bg-gray-400 shadow-lg">
-                            <div class="text-2xl mb-1">🎤</div>
-                            JUDGE
-                        </button>
-                        <button onclick="handleResult()" ${!state.transcript || state.isRecording ? 'disabled' : ''} class="bg-blue-500 text-white py-4 rounded-xl font-black text-sm hover:bg-blue-600 disabled:bg-gray-400 shadow-lg">
-                            <div class="text-2xl mb-1">✓</div>
-                            RESULT
-                        </button>
-                        <button onclick="handleNext()" ${!currentScore ? 'disabled' : ''} class="bg-purple-500 text-white py-4 rounded-xl font-black text-sm hover:bg-purple-600 disabled:bg-gray-400 shadow-lg">
-                            <div class="text-2xl mb-1">→</div>
-                            ${state.currentMission < total - 1 ? 'NEXT' : 'FINISH'}
-                        </button>
-                    </div>
-
-                    <!-- Progress -->
-                    <div class="flex justify-center gap-2 flex-wrap">
-                        ${missions.map((_, idx) => `
-                            <div class="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${state.missionScores[idx] ? 'bg-green-500 text-white' : idx === state.currentMission ? 'bg-blue-500 text-white' : 'bg-gray-300 text-gray-600'}">
-                                ${idx + 1}
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-
-                <!-- Instructions -->
-                <div class="bg-white rounded-xl p-4 mt-3">
-                    <h3 class="font-bold text-gray-800 mb-2">📋 STEPS:</h3>
-                    <ol class="list-decimal list-inside text-sm text-gray-700 space-y-1">
-                        <li>Click <strong class="text-blue-600">LISTEN</strong> to hear pronunciation</li>
-                        <li>Click <strong class="text-green-600">JUDGE</strong> to start recording</li>
-                        <li><strong>Read the sentence</strong> clearly and loudly</li>
-                        <li>Wait for text to appear (green box)</li>
-                        <li>Click <strong class="text-blue-600">RESULT</strong> to see your score</li>
-                        <li>Click <strong class="text-purple-600">NEXT</strong> for next mission</li>
-                    </ol>
-                </div>
-            `;
+        
+        function downloadExcel() {
+            const results = getFilteredResults();
+            if (results.length === 0) {
+                alert('Tidak ada data untuk didownload!');
+                return;
+            }
+            
+            const ws_data = [
+                ['ENGLISH READING ASSESSMENT REPORT'],
+                ['Chapter: ' + state.chapterTitle],
+                ['Unit: ' + state.unitTitle],
+                ['Tanggal: ' + new Date().toLocaleDateString('id-ID')],
+                [],
+                ['No', 'Nama Siswa', 'Kelas', 'Level', 'Score', 'Predikat', 'Tanggal', 'Waktu']
+            ];
+            
+            results.forEach((r, idx) => {
+                ws_data.push([
+                    idx + 1,
+                    r.name,
+                    r.class,
+                    getLevelName(r.level),
+                    r.score,
+                    r.grade,
+                    r.date,
+                    r.time
+                ]);
+            });
+            
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(ws_data);
+            
+            ws['!cols'] = [{wch: 5}, {wch: 25}, {wch: 10}, {wch: 18}, {wch: 8}, {wch: 12}, {wch: 15}, {wch: 12}];
+            
+            XLSX.utils.book_append_sheet(wb, ws, 'Results');
+            XLSX.writeFile(wb, `Reading_Assessment_${new Date().toISOString().split('T')[0]}.xlsx`);
         }
-
-        // ====== ADMIN OVERLAYS (MODALS) ======
-        function renderAdminOverlays() {
-            // Login Modal
-            const login = state.showAdminLogin ? `
-                <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-bold">Guru Login</h3>
-                            <button onclick="closeAdminAll()" class="text-gray-500 hover:text-gray-700">✕</button>
-                        </div>
-                        <div class="space-y-3">
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Username</label>
-                                <input value="${state.adminUser}" oninput="state.adminUser=this.value" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:outline-none focus:border-blue-500"/>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Password</label>
-                                <input type="password" value="${state.adminPass}" oninput="state.adminPass=this.value" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:outline-none focus:border-blue-500"/>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2 pt-2">
-                                <button onclick="closeAdminAll()" class="px-4 py-2 rounded-lg border-2">Cancel</button>
-                                <button onclick="handleAdminLogin()" class="px-4 py-2 rounded-lg bg-blue-600 text-white font-bold">Login</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            ` : '';
-
-            // Menu / Add / Change Modals (after login)
-            const adminBody = (() => {
-                if (!state.showAdminMenu) return '';
-                if (state.adminView === 'menu') {
-                    return `
-                        <div class="space-y-3">
-                           <button onclick="gotoAdd()" class="w-full px-4 py-3 rounded-lg bg-green-600 text-white font-bold">➕ Add Material</button>
-<button onclick="gotoChange()" class="w-full px-4 py-3 rounded-lg bg-blue-600 text-white font-bold">✏️ Change Material</button>
-<button onclick="gotoChangeChapterUnit()" class="w-full px-4 py-3 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold">🔄 Change Chapter & Unit</button>
-<button onclick="adminLogout()" class="w-full px-4 py-3 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold">Logout</button>
-                        </div>
-                    `;
-                }
-                if (state.adminView === 'add') {
-                    const count = missionsByLevel[state.adminSelectedLevel].length;
-                    return `
-                        <div class="space-y-3">
-                            <div class="flex items-center justify-between">
-                                <h3 class="text-lg font-bold">Add Material</h3>
-                                <div class="flex gap-2">
-                                    <button onclick="gotoAdminMenu()" class="px-3 py-1 rounded-lg border-2">⬅ Back</button>
-                                    <button onclick="adminLogout()" class="px-3 py-1 rounded-lg border-2">Logout</button>
-                                </div>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Level</label>
-                                <select onchange="state.adminSelectedLevel=this.value; render()" class="w-full mt-1 px-3 py-2 border-2 rounded-lg">
-                                    <option value="beginner">Beginner</option>
-                                    <option value="intermediate">Intermediate</option>
-                                    <option value="advanced">Advanced</option>
-                                    <option value="expert">Expert</option>
-                                </select>
-                                <p class="text-xs text-gray-500 mt-1">Current items: <span class="font-bold">${count}</span></p>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Sentence</label>
-                                <textarea oninput="state.adminNewSentence=this.value" placeholder="Type new reading sentence here..." class="w-full mt-1 px-3 py-2 border-2 rounded-lg min-h-[100px]"></textarea>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2">
-                                <button onclick="gotoAdminMenu()" class="px-4 py-2 rounded-lg border-2">Cancel</button>
-                                <button onclick="adminAddMaterial()" class="px-4 py-2 rounded-lg bg-green-600 text-white font-bold">Save</button>
-                            </div>
-                        </div>
-                    `;
-                }
-                if (state.adminView === 'change') {if (state.adminView === 'chapterUnit') {
-    return `
-        <div class="space-y-3">
-            <div class="flex items-center justify-between">
-                <h3 class="text-lg font-bold">Change Chapter & Unit</h3>
-                <button onclick="gotoAdminMenu()" class="px-3 py-1 rounded-lg border-2">⬅ Back</button>
-            </div>
-
-            <div>
-                <label class="text-sm font-semibold text-gray-700">Chapter:</label>
-                <input value="${state.currentChapter}" oninput="state.currentChapter=this.value" class="w-full px-3 py-2 border-2 rounded-lg" />
-            </div>
-
-            <div>
-                <label class="text-sm font-semibold text-gray-700">Unit:</label>
-                <input value="${state.currentUnit}" oninput="state.currentUnit=this.value" class="w-full px-3 py-2 border-2 rounded-lg" />
-            </div>
-
-            <button onclick="saveChapterUnit(); gotoAdminMenu();" class="w-full px-4 py-3 rounded-lg bg-purple-600 text-white font-bold">
-                SAVE
-            </button>
-        </div>
-    `;
-}
-                    const level = state.adminSelectedLevel;
-                    const list = missionsByLevel[level];
-                    return `
-                        <div class="space-y-3">
-                            <div class="flex items-center justify-between">
-                                <h3 class="text-lg font-bold">Change Material</h3>
-                                <div class="flex gap-2">
-                                    <button onclick="gotoAdminMenu()" class="px-3 py-1 rounded-lg border-2">⬅ Back</button>
-                                    <button onclick="adminLogout()" class="px-3 py-1 rounded-lg border-2">Logout</button>
-                                </div>
-                            </div>
-                            <div>
-                                <label class="text-sm font-semibold text-gray-700">Level</label>
-                                <select onchange="state.adminSelectedLevel=this.value; state.adminEditIndex=null; state.adminEditValue=''; render()" class="w-full mt-1 px-3 py-2 border-2 rounded-lg">
-                                    <option value="beginner" ${level==='beginner'?'selected':''}>Beginner</option>
-                                    <option value="intermediate" ${level==='intermediate'?'selected':''}>Intermediate</option>
-                                    <option value="advanced" ${level==='advanced'?'selected':''}>Advanced</option>
-                                    <option value="expert" ${level==='expert'?'selected':''}>Expert</option>
-                                </select>
-                                <p class="text-xs text-gray-500 mt-1">Total: <span class="font-bold">${list.length}</span> item(s)</p>
-                            </div>
-                            <div class="max-h-[50vh] overflow-y-auto space-y-2">
-                                ${list.map((item, idx) => `
-                                    <div class="border-2 rounded-lg p-3">
-                                        <div class="text-xs text-gray-500 mb-1">#${idx+1}</div>
-                                        ${
-                                            state.adminEditIndex === idx
-                                            ? `
-                                                <textarea oninput="state.adminEditValue=this.value" class="w-full px-3 py-2 border-2 rounded-lg min-h-[80px]">${state.adminEditValue}</textarea>
-                                                <div class="flex gap-2 mt-2">
-                                                    <button onclick="saveEditMaterial('${level}', ${idx})" class="px-3 py-1 rounded-lg bg-blue-600 text-white font-bold">Save</button>
-                                                    <button onclick="cancelEditMaterial()" class="px-3 py-1 rounded-lg border-2">Cancel</button>
-                                                </div>
-                                            `
-                                            : `
-                                                <p class="text-sm font-semibold text-gray-800">${item}</p>
-                                                <div class="flex gap-2 mt-2">
-                                                    <button onclick="startEditMaterial('${level}', ${idx})" class="px-3 py-1 rounded-lg bg-blue-600 text-white font-bold">Edit</button>
-                                                    <button onclick="adminDeleteMaterial('${level}', ${idx})" class="px-3 py-1 rounded-lg bg-red-600 text-white font-bold">Delete</button>
-                                                </div>
-                                            `
-                                        }
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                    `;
-                }
-                return '';
-            })();
-
-            const adminModal = state.showAdminMenu ? `
-                <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg">
-                        ${adminBody}
-                    </div>
-                </div>
-            ` : '';
-
-            return login + adminModal;
+        
+        function downloadPDF() {
+            const results = getFilteredResults();
+            if (results.length === 0) {
+                alert('Tidak ada data untuk didownload!');
+                return;
+            }
+            
+            const printWindow = window.open('', '', 'width=900,height=700');
+            let html = '<html><head><title>Reading Assessment Report</title>';
+            html += '<style>';
+            html += 'body{font-family:Arial,sans-serif;padding:20px}';
+            html += 'h1{text-align:center;color:#1e40af;margin-bottom:10px}';
+            html += 'h2{color:#4b5563;font-size:14px;margin:5px 0}';
+            html += 'table{width:100%;border-collapse:collapse;margin-top:20px}';
+            html += 'th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:11px}';
+            html += 'th{background-color:#3b82f6;color:white;font-weight:bold}';
+            html += 'tr:nth-child(even){background-color:#f9fafb}';
+            html += '.header-info{margin-bottom:20px;background:#f0f9ff;padding:15px;border-radius:8px;border:2px solid #3b82f6}';
+            html += '.excellent{color:#15803d;font-weight:bold}';
+            html += '.good{color:#1d4ed8;font-weight:bold}';
+            html += '.enough{color:#a16207;font-weight:bold}';
+            html += '.bad{color:#b91c1c;font-weight:bold}';
+            html += '@media print{button{display:none}}';
+            html += '</style></head><body>';
+            
+            html += '<h1>📊 ENGLISH READING ASSESSMENT REPORT</h1>';
+            html += '<div class="header-info">';
+            html += '<h2><strong>Chapter:</strong> ' + state.chapterTitle + '</h2>';
+            html += '<h2><strong>Unit:</strong> ' + state.unitTitle + '</h2>';
+            html += '<h2><strong>Tanggal Cetak:</strong> ' + new Date().toLocaleDateString('id-ID') + ' ' + new Date().toLocaleTimeString('id-ID') + '</h2>';
+            html += '<h2><strong>Total Siswa:</strong> ' + results.length + '</h2>';
+            html += '</div>';
+            
+            html += '<table><thead><tr>';
+            html += '<th>No</th><th>Nama Siswa</th><th>Kelas</th><th>Level</th><th>Score</th><th>Predikat</th><th>Tanggal</th><th>Waktu</th>';
+            html += '</tr></thead><tbody>';
+            
+            results.forEach((r, idx) => {
+                const gradeClass = r.grade.toLowerCase();
+                html += '<tr><td>' + (idx + 1) + '</td>';
+                html += '<td><strong>' + r.name + '</strong></td>';
+                html += '<td>' + r.class + '</td>';
+                html += '<td>' + getLevelName(r.level) + '</td>';
+                html += '<td style="text-align:center"><strong>' + r.score + '</strong></td>';
+                html += '<td class="' + gradeClass + '">' + r.grade + '</td>';
+                html += '<td>' + r.date + '</td>';
+                html += '<td>' + r.time + '</td></tr>';
+            });
+            
+            html += '</tbody></table>';
+            html += '<div style="margin-top:30px;text-align:center">';
+            html += '<button onclick="window.print()" style="padding:12px 30px;background:#3b82f6;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:14px">🖨️ Print / Save as PDF</button>';
+            html += '</div></body></html>';
+            
+            printWindow.document.write(html);
+            printWindow.document.close();
+        }
+        
+        function getFilteredResults() {
+            let results = loadResults();
+            if (state.filterLevel !== 'all') results = results.filter(r => r.level === state.filterLevel);
+            if (state.filterClass.trim()) {
+                const fc = state.filterClass.toLowerCase().trim();
+                results = results.filter(r => r.class.toLowerCase().includes(fc));
+            }
+            if (state.searchName.trim()) {
+                const sn = state.searchName.toLowerCase().trim();
+                results = results.filter(r => r.name.toLowerCase().includes(sn));
+            }
+            return results.sort((a, b) => b.id - a.id);
         }
 
         function render() {
             const app = document.getElementById('app');
-            if (state.showForm) {
-                app.innerHTML = renderForm();
-            } else if (state.showFinalScore) {
-                app.innerHTML = renderFinalScore();
-            } else {
-                app.innerHTML = renderMainApp();
-            }
+            if (state.showForm) renderForm(app);
+            else if (state.showFinalScore) renderFinalScore(app);
+            else renderAssessment(app);
         }
 
-// Load saved Chapter & Unit (if available)
-const savedCU = localStorage.getItem('chapter_unit_settings_v1');
-if (savedCU) {
-    const data = JSON.parse(savedCU);
-    state.currentChapter = data.chapter;
-    state.currentUnit = data.unit;
-}
+        function renderForm(app) {
+            const th = scoringThresholds;
+            let html = '<div class="min-h-screen flex items-center justify-center p-4"><div class="w-full max-w-md">';
+            html += '<div class="bg-gray-100 border-2 border-gray-300 text-gray-700 font-semibold text-center p-3 rounded-lg mb-4 relative">';
+            html += '<button onclick="openAdmin()" class="absolute top-2 right-2 text-black font-black hover:bg-gray-300 px-3 py-1 rounded-lg text-2xl">⋮</button>';
+            html += 'Created & Supported by:<br><span class="font-black text-gray-900">Deni Apel Jumbo</span></div>';
+            
+            html += '<div class="bg-white rounded-3xl shadow-2xl p-8"><div class="text-center mb-6">';
+            html += '<div class="text-6xl mb-3">📚</div>';
+            html += '<h1 class="text-2xl font-bold text-gray-900 mb-1">English Reading Assessment</h1>';
+            html += '<p class="text-sm text-gray-600">' + state.chapterTitle + ' - ' + state.unitTitle + '</p></div>';
+            html += '<div class="space-y-4 mb-6">';
+            html += '<div><label class="block text-sm font-bold text-gray-800 mb-2">👤 Student Name:</label>';
+            html += '<input type="text" id="studentName" placeholder="Enter your name" class="w-full px-4 py-3 border-2 border-blue-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"/></div>';
+            html += '<div><label class="block text-sm font-bold text-gray-800 mb-2">🏫 Class:</label>';
+            html += '<input type="text" id="studentClass" placeholder="e.g., 7A, 8B" class="w-full px-4 py-3 border-2 border-blue-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"/></div>';
+            html += '<div><label class="block text-sm font-bold text-gray-800 mb-2">🎯 Difficulty Level:</label>';
+            html += '<select id="level" class="w-full px-4 py-3 border-2 border-blue-200 rounded-xl focus:border-blue-500 focus:outline-none font-semibold bg-white text-base">';
+            html += '<option value="">-- Select Level --</option>';
+            html += '<option value="beginner">🌱 BEGINNER (Excellent ≥' + th.beginner.excellent + '%)</option>';
+            html += '<option value="intermediate">🌿 INTERMEDIATE (Excellent ≥' + th.intermediate.excellent + '%)</option>';
+            html += '<option value="advanced">🌳 ADVANCED (Excellent ≥' + th.advanced.excellent + '%)</option>';
+            html += '<option value="expert">🏆 EXPERT (Excellent ≥' + th.expert.excellent + '%)</option>';
+            html += '</select>';
+            
+            // INFO 1: Perhatian di halaman form - dipindahkan di bawah select level
+            html += '<div class="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-3 mt-2">';
+            html += '<p class="text-yellow-800 font-bold text-sm">⚠️ Perhatian: Semakin tinggi level, semakin susah mendapat nilai Excellent!</p>';
+            html += '</div>';
+            
+            html += '</div></div>';
+            html += '<button onclick="handleStart()" class="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:from-blue-600 hover:to-purple-700 transform hover:scale-105 transition">🚀 Start Assessment</button>';
+            html += '</div></div></div>';
+            if (state.showAdminLogin) html += renderAdminLogin();
+            if (state.showAdminMenu) html += renderAdminMenu();
+            app.innerHTML = html;
+        }
 
-// Initial render
-render();
-</script>
+        function renderAdminLogin() {
+            let html = '<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">';
+            html += '<div class="bg-white rounded-2xl p-6 w-full max-w-sm">';
+            html += '<div class="flex justify-between items-center mb-4"><h3 class="text-lg font-bold">Guru Login</h3>';
+            html += '<button onclick="closeAdmin()" class="text-gray-500 hover:text-gray-700 text-2xl">✕</button></div>';
+            html += '<div class="space-y-3"><div><label class="text-sm font-semibold text-gray-700">Username</label>';
+            html += '<input value="' + state.adminUser + '" oninput="state.adminUser=this.value" placeholder="Username" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:border-blue-500 focus:outline-none"/></div>';
+            html += '<div><label class="text-sm font-semibold text-gray-700">Password</label>';
+            html += '<input type="password" value="' + state.adminPass + '" oninput="state.adminPass=this.value" placeholder="Password" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:border-blue-500 focus:outline-none"/></div>';
+            html += '<div class="grid grid-cols-2 gap-2 pt-2">';
+            html += '<button onclick="closeAdmin()" class="px-4 py-2 rounded-lg border-2 hover:bg-gray-50">Cancel</button>';
+            html += '<button onclick="handleLogin()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold">Login</button>';
+            html += '</div></div></div></div>';
+            return html;
+        }
+
+        function renderAdminMenu() {
+            let html = '<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-auto">';
+            html += '<div class="bg-white rounded-2xl p-6 w-full max-w-lg my-4 max-h-[90vh] overflow-y-auto">';
+            if (state.adminView === 'menu') {
+                html += '<h3 class="text-xl font-bold mb-4 text-center">Admin Menu</h3><div class="space-y-3">';
+                html += '<button onclick="gotoStudentList()" class="w-full px-4 py-3 rounded-xl bg-yellow-600 hover:bg-yellow-700 text-white font-bold text-left flex items-center gap-3 shadow-lg"><span class="text-2xl">📊</span> Student Results</button>';
+                html += '<button onclick="gotoAdd()" class="w-full px-4 py-3 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold text-left flex items-center gap-3 shadow-lg"><span class="text-2xl">➕</span> Add Material</button>';
+                html += '<button onclick="gotoChange()" class="w-full px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-left flex items-center gap-3 shadow-lg"><span class="text-2xl">📝</span> Change Material</button>';
+                html += '<button onclick="gotoChapter()" class="w-full px-4 py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-left flex items-center gap-3 shadow-lg"><span class="text-2xl">📖</span> Change Chapter & Unit</button>';
+                html += '<button onclick="closeAdmin()" class="w-full px-4 py-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold shadow">Logout</button></div>';
+            } else if (state.adminView === 'students') html += renderStudentList();
+            else if (state.adminView === 'add') html += renderAddView();
+            else if (state.adminView === 'change') html += renderChangeView();
+            else if (state.adminView === 'chapter') html += renderChapterView();
+            html += '</div></div>';
+            return html;
+        }
+
+        function renderStudentList() {
+            const results = getFilteredResults();
+            const all = loadResults();
+            let html = '<div class="space-y-3"><div class="flex justify-between items-center">';
+            html += '<h3 class="text-lg font-bold">📊 Student Results</h3>';
+            html += '<button onclick="gotoMenu()" class="px-3 py-1 border-2 rounded-lg hover:bg-gray-50">⬅ Back</button></div>';
+            if (all.length > 0) {
+                const avg = Math.round(all.reduce((s, r) => s + r.score, 0) / all.length);
+                const ex = all.filter(r => r.grade === 'Excellent').length;
+                const gd = all.filter(r => r.grade === 'Good').length;
+                const en = all.filter(r => r.grade === 'Enough').length;
+                const bd = all.filter(r => r.grade === 'Bad').length;
+                html += '<div class="grid grid-cols-2 gap-2">';
+                html += '<div class="bg-blue-50 border-2 border-blue-300 rounded-lg p-3 text-center"><p class="text-xs text-blue-600 font-bold">Total Students</p><p class="text-2xl font-black text-blue-900">' + all.length + '</p></div>';
+                html += '<div class="bg-purple-50 border-2 border-purple-300 rounded-lg p-3 text-center"><p class="text-xs text-purple-600 font-bold">Average</p><p class="text-2xl font-black text-purple-900">' + avg + '</p></div></div>';
+                html += '<div class="grid grid-cols-4 gap-2">';
+                html += '<div class="bg-green-50 border border-green-300 rounded-lg p-2 text-center"><p class="text-xs text-green-600 font-bold">Excellent</p><p class="text-lg font-black text-green-900">' + ex + '</p></div>';
+                html += '<div class="bg-blue-50 border border-blue-300 rounded-lg p-2 text-center"><p class="text-xs text-blue-600 font-bold">Good</p><p class="text-lg font-black text-blue-900">' + gd + '</p></div>';
+                html += '<div class="bg-yellow-50 border border-yellow-300 rounded-lg p-2 text-center"><p class="text-xs text-yellow-600 font-bold">Enough</p><p class="text-lg font-black text-yellow-900">' + en + '</p></div>';
+                html += '<div class="bg-red-50 border border-red-300 rounded-lg p-2 text-center"><p class="text-xs text-red-600 font-bold">Bad</p><p class="text-lg font-black text-red-900">' + bd + '</p></div></div>';
+            }
+            html += '<div class="bg-gray-50 border-2 border-gray-300 rounded-lg p-3 space-y-2"><p class="text-xs font-bold text-gray-700">🔍 FILTERS:</p>';
+            html += '<div><label class="text-xs font-semibold text-gray-600">Level</label>';
+            html += '<select onchange="state.filterLevel=this.value; render()" class="w-full mt-1 px-2 py-1 border rounded text-sm">';
+            html += '<option value="all"' + (state.filterLevel === 'all' ? ' selected' : '') + '>All Levels</option>';
+            html += '<option value="beginner"' + (state.filterLevel === 'beginner' ? ' selected' : '') + '>Beginner</option>';
+            html += '<option value="intermediate"' + (state.filterLevel === 'intermediate' ? ' selected' : '') + '>Intermediate</option>';
+            html += '<option value="advanced"' + (state.filterLevel === 'advanced' ? ' selected' : '') + '>Advanced</option>';
+            html += '<option value="expert"' + (state.filterLevel === 'expert' ? ' selected' : '') + '>Expert</option></select></div>';
+            html += '<div><label class="text-xs font-semibold text-gray-600">Class</label>';
+            html += '<input value="' + state.filterClass + '" oninput="state.filterClass=this.value; render()" placeholder="e.g., 7A" class="w-full mt-1 px-2 py-1 border rounded text-sm"/></div>';
+            html += '<div><label class="text-xs font-semibold text-gray-600">Name</label>';
+            html += '<input value="' + state.searchName + '" oninput="state.searchName=this.value; render()" placeholder="Search..." class="w-full mt-1 px-2 py-1 border rounded text-sm"/></div></div>';
+            if (results.length > 0) {
+                html += '<div class="grid grid-cols-2 gap-2">';
+                html += '<button onclick="downloadExcel()" class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg text-sm flex items-center justify-center gap-2"><span>📊</span> Excel</button>';
+                html += '<button onclick="downloadPDF()" class="px-3 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg text-sm flex items-center justify-center gap-2"><span>📄</span> PDF</button></div>';
+            }
+            html += '<div class="bg-blue-50 border-2 border-blue-300 rounded-lg p-2"><p class="text-xs text-blue-800 font-bold">Showing: ' + results.length + ' of ' + all.length + '</p></div>';
+            if (results.length === 0) {
+                html += '<div class="text-center py-8"><p class="text-gray-500 font-semibold">No results found</p></div>';
+            } else {
+                html += '<div class="max-h-[40vh] overflow-y-auto space-y-2">';
+                results.forEach(r => {
+                    const bc = r.grade === 'Excellent' ? 'border-green-300' : r.grade === 'Good' ? 'border-blue-300' : r.grade === 'Enough' ? 'border-yellow-300' : 'border-red-300';
+                    html += '<div class="border-2 rounded-lg p-3 bg-white ' + bc + '">';
+                    html += '<div class="flex justify-between items-start mb-2"><div class="flex-1">';
+                    html += '<p class="font-black text-gray-900 text-sm">' + r.name + '</p>';
+                    html += '<p class="text-xs text-gray-600">Class: <span class="font-bold">' + r.class + '</span> | Level: <span class="font-bold">' + getLevelName(r.level) + '</span></p>';
+                    html += '<p class="text-xs text-gray-500">' + r.date + ' - ' + r.time + '</p></div>';
+                    html += '<div class="text-right"><p class="text-2xl font-black text-gray-900">' + r.score + '</p>';
+                    html += '<p class="text-xs font-bold px-2 py-1 rounded ' + getScoreColorLight(r.grade) + '">' + r.grade + '</p></div></div>';
+                    html += '<div class="flex gap-2 flex-wrap text-xs mb-2">';
+                    r.missionScores.forEach((ms, i) => {
+                        html += '<span class="px-2 py-1 rounded font-bold ' + getScoreColorLight(ms) + '">M' + (i + 1) + ': ' + ms + '</span>';
+                    });
+                    html += '</div>';
+                    html += '<button onclick="deleteResult(' + r.id + ')" class="w-full px-3 py-1 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs">🗑️ Delete</button></div>';
+                });
+                html += '</div>';
+                html += '<button onclick="clearAllResults()" class="w-full px-4 py-2 bg-red-700 hover:bg-red-800 text-white font-bold rounded-lg text-sm">⚠️ DELETE ALL</button>';
+            }
+            html += '</div>';
+            return html;
+        }
+
+        function renderChapterView() {
+            let html = '<div class="space-y-4"><div class="flex justify-between items-center">';
+            html += '<h3 class="text-lg font-bold">Change Chapter & Unit</h3>';
+            html += '<button onclick="gotoMenu()" class="px-3 py-1 border-2 rounded-lg hover:bg-gray-50">⬅ Back</button></div>';
+            html += '<div><label class="text-sm font-semibold text-gray-700">Chapter Title</label>';
+            html += '<input id="chInput" value="' + state.chapterTitle + '" placeholder="Chapter" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:border-blue-500 focus:outline-none"/></div>';
+            html += '<div><label class="text-sm font-semibold text-gray-700">Unit Title</label>';
+            html += '<input id="unInput" value="' + state.unitTitle + '" placeholder="Unit" class="w-full mt-1 px-3 py-2 border-2 rounded-lg focus:border-blue-500 focus:outline-none"/></div>';
+            html += '<div class="grid grid-cols-2 gap-2">';
+            html += '<button onclick="gotoMenu()" class="px-4 py-2 border-2 rounded-lg hover:bg-gray-50">Cancel</button>';
+            html += '<button onclick="updateChapter()" class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg">Save</button></div></div>';
+            return html;
+        }
+
+        function renderAddView() {
+            const count = missionsByLevel[state.adminSelectedLevel].length;
+            let html = '<div class="space-y-3"><div class="flex justify-between items-center">';
+            html += '<h3 class="text-lg font-bold">Add Material</h3>';
+            html += '<button onclick="gotoMenu()" class="px-3 py-1 border-2 rounded-lg hover:bg-gray-50">⬅ Back</button></div>';
+            html += '<div><label class="text-sm font-semibold text-gray-700">Level</label>';
+            html += '<select onchange="state.adminSelectedLevel=this.value; render()" class="w-full mt-1 px-3 py-2 border-2 rounded-lg">';
+            html += '<option value="beginner"' + (state.adminSelectedLevel === 'beginner' ? ' selected' : '') + '>Beginner</option>';
+            html += '<option value="intermediate"' + (state.adminSelectedLevel === 'intermediate' ? ' selected' : '') + '>Intermediate</option>';
+            html += '<option value="advanced"' + (state.adminSelectedLevel === 'advanced' ? ' selected' : '') + '>Advanced</option>';
+            html += '<option value="expert"' + (state.adminSelectedLevel === 'expert' ? ' selected' : '') + '>Expert</option>';
+            html += '</select><p class="text-xs text-gray-500 mt-1">Current: <span class="font-bold">' + count + '</span></p></div>';
+            html += '<div><label class="text-sm font-semibold text-gray-700">Sentence</label>';
+            html += '<textarea oninput="state.adminNewSentence=this.value" placeholder="Type sentence..." class="w-full mt-1 px-3 py-2 border-2 rounded-lg min-h-[100px]"></textarea></div>';
+            html += '<div class="grid grid-cols-2 gap-2">';
+            html += '<button onclick="gotoMenu()" class="px-4 py-2 border-2 rounded-lg hover:bg-gray-50">Cancel</button>';
+            html += '<button onclick="addMaterial()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg">Save</button></div></div>';
+            return html;
+        }
+
+        function renderChangeView() {
+            const lvl = state.adminSelectedLevel;
+            const list = missionsByLevel[lvl];
+            let html = '<div class="space-y-3"><div class="flex justify-between items-center">';
+            html += '<h3 class="text-lg font-bold">Change Material</h3>';
+            html += '<button onclick="gotoMenu()" class="px-3 py-1 border-2 rounded-lg hover:bg-gray-50">⬅ Back</button></div>';
+            html += '<div><label class="text-sm font-semibold text-gray-700">Level</label>';
+            html += '<select onchange="state.adminSelectedLevel=this.value; state.adminEditIndex=null; render()" class="w-full mt-1 px-3 py-2 border-2 rounded-lg">';
+            html += '<option value="beginner"' + (lvl === 'beginner' ? ' selected' : '') + '>Beginner</option>';
+            html += '<option value="intermediate"' + (lvl === 'intermediate' ? ' selected' : '') + '>Intermediate</option>';
+            html += '<option value="advanced"' + (lvl === 'advanced' ? ' selected' : '') + '>Advanced</option>';
+            html += '<option value="expert"' + (lvl === 'expert' ? ' selected' : '') + '>Expert</option>';
+            html += '</select><p class="text-xs text-gray-500 mt-1">Total: <span class="font-bold">' + list.length + '</span></p></div>';
+            html += '<div class="max-h-[50vh] overflow-y-auto space-y-2">';
+            list.forEach((item, idx) => {
+                html += '<div class="border-2 rounded-lg p-3"><div class="text-xs text-gray-500 mb-1 font-semibold">#' + (idx + 1) + '</div>';
+                if (state.adminEditIndex === idx) {
+                    html += '<textarea oninput="state.adminEditValue=this.value" class="w-full px-3 py-2 border-2 rounded-lg min-h-[80px]">' + state.adminEditValue + '</textarea>';
+                    html += '<div class="flex gap-2 mt-2">';
+                    html += '<button onclick="saveEdit(\'' + lvl + '\', ' + idx + ')" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm">Save</button>';
+                    html += '<button onclick="cancelEdit()" class="px-3 py-1 border-2 rounded-lg hover:bg-gray-50 text-sm">Cancel</button></div>';
+                } else {
+                    html += '<p class="text-sm font-semibold text-gray-800 mb-2">' + item + '</p>';
+                    html += '<div class="flex gap-2">';
+                    html += '<button onclick="startEdit(\'' + lvl + '\', ' + idx + ')" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm">Edit</button>';
+                    html += '<button onclick="deleteMaterial(\'' + lvl + '\', ' + idx + ')" class="px-3 py-1 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg text-sm">Delete</button></div>';
+                }
+                html += '</div>';
+            });
+            html += '</div></div>';
+            return html;
+        }
+
+        function renderFinalScore(app) {
+            const fs = getFinalScore();
+            const fg = getFinalGrade(fs);
+            const th = scoringThresholds[state.selectedLevel];
+            let html = '<div class="min-h-screen flex items-center justify-center p-4">';
+            html += '<div class="bg-white rounded-3xl shadow-2xl p-6 max-w-2xl w-full">';
+            html += '<div class="text-center mb-6"><div class="text-6xl mb-3">🏆</div>';
+            html += '<h1 class="text-3xl font-bold text-gray-900 mb-1">Assessment Complete!</h1></div>';
+            html += '<div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl p-5 mb-4 border-2 border-blue-300">';
+            html += '<div class="grid grid-cols-2 gap-4 mb-3">';
+            html += '<div class="text-center border-r border-blue-300"><p class="text-xs text-gray-500 font-bold mb-2">STUDENT</p>';
+            html += '<p class="text-lg font-black text-gray-900">' + state.studentName + '</p></div>';
+            html += '<div class="text-center"><p class="text-xs text-gray-500 font-bold mb-2">CLASS</p>';
+            html += '<p class="text-lg font-black text-gray-900">' + state.studentClass + '</p></div></div>';
+            html += '<div class="text-center pt-3 border-t border-blue-300">';
+            html += '<span class="' + getLevelColor(state.selectedLevel) + ' text-white px-4 py-2 rounded-lg font-black text-sm">' + getLevelName(state.selectedLevel) + '</span></div></div>';
+            html += '<div class="bg-gradient-to-r from-purple-100 to-pink-100 rounded-2xl p-6 mb-5 border-2 border-purple-300">';
+            html += '<h2 class="text-xl font-semibold text-center mb-3 text-gray-900">Final Score</h2>';
+            html += '<div class="text-5xl font-bold text-center text-purple-600 mb-2">' + fs + '</div>';
+            html += '<div class="text-2xl font-bold text-center py-3 px-4 rounded-xl ' + getScoreColorLight(fg) + '">' + fg + '</div></div>';
+            html += '<div class="space-y-2 mb-5"><h3 class="font-semibold text-gray-800 mb-2">Score per Mission:</h3>';
+            state.missionScores.forEach((score, idx) => {
+                html += '<div class="flex justify-between items-center bg-gray-50 p-3 rounded-xl border border-gray-200">';
+                html += '<span class="text-gray-700 font-medium">Mission ' + (idx + 1) + '</span>';
+                html += '<span class="font-bold px-4 py-1 rounded-lg ' + getScoreColorLight(score) + '">' + score + '</span></div>';
+            });
+            html += '</div>';
+            html += '<button onclick="restartApp()" class="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white py-4 rounded-xl font-bold text-lg hover:from-purple-600 hover:to-pink-600 shadow-lg transform hover:scale-105 transition">🔄 Start New Assessment</button>';
+            html += '</div></div>';
+            app.innerHTML = html;
+        }
+
+        function renderAssessment(app) {
+            const missions = missionsByLevel[state.selectedLevel];
+            const total = missions.length;
+            const cs = state.missionScores[state.currentMission];
+            const th = scoringThresholds[state.selectedLevel];
+            let html = '<div class="space-y-3">';
+            html += '<div class="bg-white rounded-2xl p-4 shadow-lg border-2 border-blue-200">';
+            html += '<div class="grid grid-cols-2 gap-4 mb-3">';
+            html += '<div class="border-r border-gray-300 pr-3"><p class="text-xs text-gray-500 font-bold mb-1">STUDENT</p>';
+            html += '<p class="text-base font-black text-gray-900 truncate">' + state.studentName + '</p></div>';
+            html += '<div class="pl-3"><p class="text-xs text-gray-500 font-bold mb-1">CLASS</p>';
+            html += '<p class="text-base font-black text-gray-900">' + state.studentClass + '</p></div></div>';
+            html += '<div class="flex justify-between items-center pt-3 border-t border-gray-300">';
+            html += '<span class="' + getLevelColor(state.selectedLevel) + ' text-white px-3 py-1 rounded-lg font-bold text-xs">' + getLevelName(state.selectedLevel) + '</span>';
+            html += '<button onclick="exitToHome()" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-lg font-bold text-xs flex items-center gap-1"><span>🚪</span> OUT</button>';
+            html += '</div></div>';
+            
+            // INFO 3: STEPS di halaman assessment
+            html += '<div class="bg-white rounded-2xl p-4 shadow-lg border-2 border-gray-300">';
+            html += '<p class="text-sm font-bold text-gray-800 mb-3">📋 STEPS:</p>';
+            html += '<ol class="text-xs text-gray-700 space-y-1 list-decimal list-inside">';
+            html += '<li>Click <span class="text-blue-600 font-bold">LISTEN</span> to hear pronunciation</li>';
+            html += '<li>Click <span class="text-green-600 font-bold">JUDGE</span> to start recording</li>';
+            html += '<li><span class="font-bold">Read the sentence</span> clearly and loudly</li>';
+            html += '<li>Wait for text to appear (green box)</li>';
+            html += '<li>Click <span class="text-blue-600 font-bold">RESULT</span> to see your score</li>';
+            html += '<li>Click <span class="text-purple-600 font-bold">NEXT</span> for next mission</li>';
+            html += '</ol></div>';
+            
+            html += '<button onclick="testMic()" class="w-full bg-gradient-to-r from-green-500 to-blue-500 text-white py-3 px-4 rounded-2xl font-black text-base hover:from-green-600 hover:to-blue-600 shadow-lg flex items-center justify-center gap-2"><span class="text-2xl">🎤</span> TEST MICROPHONE</button>';
+            html += '<div class="bg-white rounded-3xl shadow-2xl p-5"><div class="text-center mb-4">';
+            html += '<div class="flex items-center justify-center gap-2 mb-2"><span class="text-3xl">📚</span>';
+            html += '<h1 class="text-xl font-bold text-gray-900">Reading Test</h1></div>';
+            html += '<p class="text-xs text-gray-600 font-semibold">' + state.chapterTitle + ' - ' + state.unitTitle + '</p>';
+            html += '<p class="text-lg font-bold text-gray-900 mt-2">Mission ' + (state.currentMission + 1) + ' of ' + total + '</p>';
+            html += '<div class="w-full bg-gray-200 rounded-full h-3 mt-2">';
+            html += '<div class="bg-gradient-to-r from-blue-500 to-purple-600 h-3 rounded-full transition-all" style="width: ' + (((state.currentMission + 1) / total) * 100) + '%"></div></div></div>';
+            html += '<div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl p-4 mb-4 border-2 border-blue-300">';
+            html += '<div class="flex justify-between items-start mb-3"><h2 class="text-sm font-bold text-gray-900">📖 Read this:</h2>';
+            html += '<button onclick="speakText()" class="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm shadow-lg transition ' + (state.isSpeaking ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white') + '">🔊 ' + (state.isSpeaking ? 'STOP' : 'LISTEN') + '</button></div>';
+            html += '<p class="text-base text-gray-900 leading-relaxed font-semibold">"' + missions[state.currentMission] + '"</p></div>';
+            if (state.isRecording) {
+                html += '<div class="bg-red-50 border-2 border-red-500 rounded-2xl p-4 mb-4 text-center animate-pulse">';
+                html += '<div class="text-5xl mb-2">🎤</div><p class="text-red-800 font-black text-lg">RECORDING...</p></div>';
+            }
+            if (state.transcript) {
+                // INFO 2: Click RESULT to get score
+                html += '<div class="bg-green-50 border-2 border-green-500 rounded-2xl p-4 mb-4">';
+                html += '<p class="text-xs text-green-700 font-bold mb-2">✅ YOUR RECORDING:</p>';
+                html += '<p class="text-sm text-gray-900 font-semibold italic mb-3">"' + state.transcript + '"</p>';
+                html += '<p class="text-yellow-700 font-bold text-xs">👉 Click RESULT to get score</p>';
+                html += '</div>';
+            }
+            if (state.showResult && cs) {
+                html += '<div class="rounded-2xl p-5 mb-4 text-center border-4 shadow-xl ' + getScoreColor(cs) + '">';
+                html += '<div class="text-5xl mb-2">✔</div><p class="text-sm font-bold mb-1">YOUR SCORE:</p>';
+                html += '<p class="text-4xl font-black mb-2">' + cs + '</p></div>';
+            }
+            html += '<div class="grid grid-cols-3 gap-3 mb-4">';
+            html += '<button onclick="handleJudge()"' + (state.isRecording ? ' disabled' : '') + ' class="bg-green-500 text-white py-4 rounded-2xl font-black text-sm hover:bg-green-600 disabled:bg-gray-400 shadow-lg transition transform hover:scale-105"><div class="text-2xl mb-1">🎤</div>JUDGE</button>';
+            html += '<button onclick="handleResult()"' + (!state.transcript || state.isRecording ? ' disabled' : '') + ' class="bg-blue-500 text-white py-4 rounded-2xl font-black text-sm hover:bg-blue-600 disabled:bg-gray-400 shadow-lg transition transform hover:scale-105"><div class="text-2xl mb-1">✔</div>RESULT</button>';
+            html += '<button onclick="handleNext()"' + (!cs ? ' disabled' : '') + ' class="bg-purple-500 text-white py-4 rounded-2xl font-black text-sm hover:bg-purple-600 disabled:bg-gray-400 shadow-lg transition transform hover:scale-105"><div class="text-2xl mb-1">→</div>' + (state.currentMission < total - 1 ? 'NEXT' : 'FINISH') + '</button></div>';
+            html += '<div class="flex justify-center gap-2 flex-wrap">';
+            missions.forEach((_, idx) => {
+                const ac = state.missionScores[idx] ? 'bg-green-500 text-white' : (idx === state.currentMission ? 'bg-blue-500 text-white' : 'bg-gray-300 text-gray-600');
+                html += '<div class="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md ' + ac + '">' + (idx + 1) + '</div>';
+            });
+            html += '</div></div></div>';
+            app.innerHTML = html;
+        }
+        
+        render();
+    </script>
 </body>
 </html>
-Your Comment
-Syntax Highlighting:
-None
-create new paste  /  syntax languages  /  archive  /  faq  /  tools  /  night mode  /  api  /  scraping api  /  news  /  pro
-privacy statement  /  cookies policy  /  terms of service /  security disclosure  /  dmca  /  report abuse  /  contact
